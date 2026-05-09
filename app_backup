@@ -1,0 +1,437 @@
+import streamlit as st
+import pandas as pd
+import numpy as np
+from pyxlsb import open_workbook
+from datetime import date, timedelta
+import plotly.graph_objects as go
+import plotly.express as px
+
+# ─── Page config ─────────────────────────────────────────────────────────────
+st.set_page_config(
+    page_title="Kenaz P&L Dashboard",
+    page_icon="🕌",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
+
+# ─── Brand colors ─────────────────────────────────────────────────────────────
+GOLD = "#C9A84C"
+CREAM = "#FFFFF8"
+DARK = "#1A1A1A"
+CARD_BG = "#2B2B2B"
+
+st.markdown(f"""
+<style>
+  [data-testid="stAppViewContainer"] {{
+    background-color: {DARK};
+  }}
+  [data-testid="stSidebar"] {{
+    background-color: #222222;
+  }}
+  .block-container {{ padding-top: 1.5rem; }}
+
+  /* metric cards */
+  .kpi-card {{
+    background: {CARD_BG};
+    border: 1px solid {GOLD}33;
+    border-radius: 10px;
+    padding: 16px 20px;
+    margin-bottom: 8px;
+  }}
+  .kpi-label {{ color: #aaa; font-size: 12px; letter-spacing: 1px; text-transform: uppercase; }}
+  .kpi-value {{ color: {GOLD}; font-size: 26px; font-weight: 700; margin: 4px 0; }}
+  .kpi-sub   {{ color: #777; font-size: 12px; }}
+
+  /* table */
+  .pnl-table {{ width: 100%; border-collapse: collapse; font-size: 13px; }}
+  .pnl-table th {{ background: {GOLD}22; color: {GOLD}; padding: 8px 12px; text-align: right; border-bottom: 1px solid {GOLD}44; }}
+  .pnl-table th:first-child {{ text-align: left; }}
+  .pnl-table td {{ padding: 7px 12px; text-align: right; border-bottom: 1px solid #333; color: #ddd; }}
+  .pnl-table td:first-child {{ text-align: left; color: #bbb; }}
+  .pnl-table tr.section-header td {{ background: #333; color: {GOLD}; font-weight: 600; }}
+  .pnl-table tr.total-row td {{ background: {GOLD}11; font-weight: 700; color: {CREAM}; border-top: 2px solid {GOLD}44; }}
+  .pnl-table tr:hover td {{ background: #2f2f2f; }}
+  .positive {{ color: #4caf50 !important; }}
+  .negative {{ color: #f44336 !important; }}
+  .percent  {{ color: #aaa !important; font-size: 12px; }}
+
+  /* header bar */
+  .header-bar {{
+    background: {GOLD};
+    padding: 12px 20px;
+    border-radius: 8px;
+    color: #1A1A1A;
+    font-weight: 800;
+    font-size: 20px;
+    letter-spacing: 1.5px;
+    margin-bottom: 20px;
+  }}
+
+  h1, h2, h3 {{ color: {GOLD} !important; }}
+  label {{ color: #aaa !important; }}
+  .stSelectbox label, .stMultiSelect label {{ color: #aaa !important; }}
+</style>
+""", unsafe_allow_html=True)
+
+
+# ─── Helpers ──────────────────────────────────────────────────────────────────
+def xlsb_to_date(n):
+    try:
+        return date(1899, 12, 30) + timedelta(days=int(float(n)))
+    except Exception:
+        return None
+
+def fmt_lacs(v, decimals=2):
+    if pd.isna(v) or v == 0:
+        return "–"
+    return f"₹{v/100000:,.{decimals}f}L"
+
+def fmt_pct(v):
+    if pd.isna(v):
+        return "–"
+    return f"{v:.1f}%"
+
+def color_pct(v, inverse=False):
+    if pd.isna(v):
+        return ""
+    good = v >= 0
+    if inverse:
+        good = not good
+    return "positive" if good else "negative"
+
+
+# ─── Data loader ──────────────────────────────────────────────────────────────
+@st.cache_data(show_spinner="Reading file…")
+def load_data(file_bytes: bytes) -> pd.DataFrame:
+    import tempfile, os
+    with tempfile.NamedTemporaryFile(suffix=".xlsb", delete=False) as tmp:
+        tmp.write(file_bytes)
+        tmp_path = tmp.name
+
+    rows = []
+    with open_workbook(tmp_path) as wb:
+        with wb.get_sheet("For P&L") as ws:
+            for row in ws.rows():
+                rows.append([c.v for c in row])
+    os.unlink(tmp_path)
+
+    headers = rows[4]
+    df = pd.DataFrame(rows[5:], columns=headers)
+
+    # keep only data rows
+    df = df.dropna(subset=["Sum of Revenue Without Tax"])
+    df = df[df["Sum of Revenue Without Tax"].astype(str).str.strip() != ""]
+    df = df[pd.to_numeric(df["Sum of Revenue Without Tax"], errors="coerce").notna()]
+    df = df[pd.to_numeric(df["Sum of Revenue Without Tax"], errors="coerce") != 0]
+    df = df.dropna(subset=["Channel"])
+    df = df[df["Channel"].astype(str).isin(["Website","FBA","RK","Meesho","Flipkart","Myntra PPMP"])]
+
+    num_cols = [c for c in df.columns if c and c.startswith("Sum of")]
+    for col in num_cols:
+        df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
+
+    df["Month_date"] = df["Month"].apply(xlsb_to_date)
+    df["Month_label"] = df["Month_date"].apply(lambda d: d.strftime("%b-%y") if d else "Unknown")
+    df["Month_sort"]  = df["Month_date"].apply(lambda d: d.strftime("%Y-%m") if d else "9999-99")
+
+    # rename for display
+    df = df.rename(columns={
+        "Sum of Revenue Without Tax": "Net Sales",
+        "Sum of COGS":               "COGS",
+        "Sum of Inward":             "Freight Inward",
+        "Sum of Wages":              "Wages",
+        "Sum of commission":         "Commission",
+        "Sum of Payment Gateway":    "Payment Gateway",
+        "Sum of Shipping":           "Shipping",
+        "Sum of others":             "Others",
+        "Sum of Total Spend":        "Ad Spend",
+        "Sum of Bulk Logistic Cost": "Bulk Logistic",
+        "Sum of Packaging Cost":     "Packaging",
+        "Sum of Warehousing Charges":"Warehousing",
+        "Sum of TOTAL MRP":          "MRP Sales",
+        "Sum of Qty":                "Quantity",
+    })
+
+    df["GM"]   = df["Net Sales"] - df["COGS"] - df["Freight Inward"] - df["Wages"]
+    df["CM1"]  = df["GM"] - df["Commission"] - df["Payment Gateway"] - df["Shipping"] - df["Others"] - df["Bulk Logistic"] - df["Packaging"] - df["Warehousing"]
+    df["CM2"]  = df["CM1"] - df["Ad Spend"]
+    df["COGS%"] = (df["COGS"] / df["Net Sales"] * 100).replace([np.inf, -np.inf], 0)
+    df["GM%"]   = (df["GM"]  / df["Net Sales"] * 100).replace([np.inf, -np.inf], 0)
+    df["CM1%"]  = (df["CM1"] / df["Net Sales"] * 100).replace([np.inf, -np.inf], 0)
+    df["CM2%"]  = (df["CM2"] / df["Net Sales"] * 100).replace([np.inf, -np.inf], 0)
+
+    return df
+
+
+# ─── Sidebar ──────────────────────────────────────────────────────────────────
+with st.sidebar:
+    st.markdown(f"<div style='color:{GOLD};font-size:22px;font-weight:800;letter-spacing:2px;margin-bottom:4px;'>🕌 KENAZ</div>", unsafe_allow_html=True)
+    st.markdown("<div style='color:#aaa;font-size:11px;margin-bottom:20px;'>Crafted in Dubai · Made in India</div>", unsafe_allow_html=True)
+
+    uploaded = st.file_uploader("Upload P&L (.xlsb)", type=["xlsb"])
+    st.markdown("---")
+
+    if uploaded:
+        df_all = load_data(uploaded.read())
+
+        channels_avail = sorted(df_all["Channel"].unique())
+        months_avail   = df_all[["Month_label","Month_sort"]].drop_duplicates().sort_values("Month_sort")["Month_label"].tolist()
+
+        sel_channels = st.multiselect("Channels", channels_avail, default=channels_avail, key="ch")
+        sel_months   = st.multiselect("Months",   months_avail,   default=months_avail,  key="mo")
+
+        st.markdown("---")
+        view = st.radio("View", ["P&L Summary", "Channel Deep-Dive", "Month Trend", "Channel Mix"], index=0)
+    else:
+        st.info("Upload a `.xlsb` file to get started.")
+        view = None
+        df_all = None
+
+
+# ─── Main ─────────────────────────────────────────────────────────────────────
+st.markdown(f"<div class='header-bar'>📊 KENAZ PERFUMES — P&L DASHBOARD</div>", unsafe_allow_html=True)
+
+if df_all is None:
+    st.markdown("""
+    <div style='color:#777;font-size:15px;margin-top:60px;text-align:center;'>
+        ← Upload your <code>PL_Kenaz_*.xlsb</code> file from the sidebar to begin.
+    </div>""", unsafe_allow_html=True)
+    st.stop()
+
+# apply filters
+df = df_all[df_all["Channel"].isin(sel_channels) & df_all["Month_label"].isin(sel_months)]
+
+if df.empty:
+    st.warning("No data matches the selected filters.")
+    st.stop()
+
+
+# ─── KPI strip ────────────────────────────────────────────────────────────────
+tot = df[["Net Sales","COGS","GM","CM1","CM2","Ad Spend","Quantity"]].sum()
+
+c1,c2,c3,c4,c5,c6 = st.columns(6)
+def kpi(col, label, value, sub=""):
+    col.markdown(f"""
+    <div class='kpi-card'>
+      <div class='kpi-label'>{label}</div>
+      <div class='kpi-value'>{value}</div>
+      <div class='kpi-sub'>{sub}</div>
+    </div>""", unsafe_allow_html=True)
+
+kpi(c1, "Net Sales",   fmt_lacs(tot["Net Sales"]),  f"{int(tot['Quantity']):,} units")
+kpi(c2, "Gross Margin",fmt_lacs(tot["GM"]),          fmt_pct(tot["GM"]/tot["Net Sales"]*100 if tot["Net Sales"] else 0)+" of NSV")
+kpi(c3, "CM1",         fmt_lacs(tot["CM1"]),         fmt_pct(tot["CM1"]/tot["Net Sales"]*100 if tot["Net Sales"] else 0)+" of NSV")
+kpi(c4, "CM2",         fmt_lacs(tot["CM2"]),         fmt_pct(tot["CM2"]/tot["Net Sales"]*100 if tot["Net Sales"] else 0)+" of NSV")
+kpi(c5, "Ad Spend",    fmt_lacs(tot["Ad Spend"]),    fmt_pct(tot["Ad Spend"]/tot["Net Sales"]*100 if tot["Net Sales"] else 0)+" of NSV")
+kpi(c6, "COGS",        fmt_lacs(tot["COGS"]),        fmt_pct(tot["COGS"]/tot["Net Sales"]*100 if tot["Net Sales"] else 0)+" of NSV")
+
+st.markdown("<br>", unsafe_allow_html=True)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# VIEW: P&L Summary
+# ═══════════════════════════════════════════════════════════════════════════════
+if view == "P&L Summary":
+    st.subheader("P&L Summary — Channel-wise")
+
+    channels = sel_channels
+    agg = df.groupby("Channel")[["Net Sales","COGS","Freight Inward","Wages","GM",
+                                   "Commission","Payment Gateway","Shipping","Others",
+                                   "Bulk Logistic","Packaging","Warehousing",
+                                   "Ad Spend","CM1","CM2"]].sum()
+    total = agg.sum()
+
+    def row_html(label, key, is_section=False, is_total=False, inverse=False):
+        cls = "section-header" if is_section else ("total-row" if is_total else "")
+        vals = []
+        for ch in channels:
+            v = agg.loc[ch, key] if ch in agg.index else 0
+            nsv = agg.loc[ch, "Net Sales"] if ch in agg.index else 1
+            pct = v/nsv*100 if nsv else 0
+            color = "positive" if (pct>=0) != inverse else "negative"
+            vals.append(f"<td><span class='{color}'>{fmt_lacs(v)}</span><br><span class='percent'>{fmt_pct(pct)}</span></td>")
+        tv = total[key]; tn = total["Net Sales"]
+        tp = tv/tn*100 if tn else 0
+        tc = "positive" if (tp>=0) != inverse else "negative"
+        vals.append(f"<td><span class='{tc}'>{fmt_lacs(tv)}</span><br><span class='percent'>{fmt_pct(tp)}</span></td>")
+        return f"<tr class='{cls}'><td>{label}</td>{''.join(vals)}</tr>"
+
+    heads = "".join(f"<th>{ch}</th>" for ch in channels) + "<th>Total</th>"
+    html  = f"""
+    <table class='pnl-table'>
+      <thead><tr><th>Metric (INR Lacs)</th>{heads}</tr></thead>
+      <tbody>
+        {row_html("Net Sales",           "Net Sales",       is_section=True)}
+        {row_html("Less: COGS",          "COGS",            inverse=True)}
+        {row_html("Less: Freight Inward","Freight Inward",  inverse=True)}
+        {row_html("Less: Wages",         "Wages",           inverse=True)}
+        {row_html("Gross Margin",        "GM",              is_total=True)}
+        {row_html("Less: Commission",    "Commission",      inverse=True)}
+        {row_html("Less: Payment GW",    "Payment Gateway", inverse=True)}
+        {row_html("Less: Shipping",      "Shipping",        inverse=True)}
+        {row_html("Less: Others",        "Others",          inverse=True)}
+        {row_html("Less: Bulk Logistic", "Bulk Logistic",   inverse=True)}
+        {row_html("Less: Packaging",     "Packaging",       inverse=True)}
+        {row_html("Less: Warehousing",   "Warehousing",     inverse=True)}
+        {row_html("CM1",                 "CM1",             is_total=True)}
+        {row_html("Less: Ad Spend",      "Ad Spend",        inverse=True)}
+        {row_html("CM2",                 "CM2",             is_total=True)}
+      </tbody>
+    </table>"""
+    st.markdown(html, unsafe_allow_html=True)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# VIEW: Channel Deep-Dive
+# ═══════════════════════════════════════════════════════════════════════════════
+elif view == "Channel Deep-Dive":
+    st.subheader("Channel Deep-Dive")
+
+    ch_sel = st.selectbox("Select Channel", sel_channels)
+    dch = df[df["Channel"] == ch_sel]
+
+    pivot = dch.groupby("Month_label").apply(
+        lambda g: pd.Series({
+            "Net Sales": g["Net Sales"].sum(),
+            "COGS":      g["COGS"].sum(),
+            "GM":        g["GM"].sum(),
+            "CM1":       g["CM1"].sum(),
+            "CM2":       g["CM2"].sum(),
+            "Ad Spend":  g["Ad Spend"].sum(),
+            "Qty":       g["Quantity"].sum(),
+        })
+    ).reset_index()
+
+    # sort by month
+    order = df[["Month_label","Month_sort"]].drop_duplicates().sort_values("Month_sort")["Month_label"].tolist()
+    pivot = pivot.set_index("Month_label").reindex([m for m in order if m in pivot["Month_label"].values]).reset_index()
+
+    # waterfall bar chart
+    fig = go.Figure()
+    fig.add_trace(go.Bar(name="CM2",      x=pivot["Month_label"], y=pivot["CM2"],      marker_color=GOLD))
+    fig.add_trace(go.Bar(name="Ad Spend", x=pivot["Month_label"], y=pivot["Ad Spend"], marker_color="#e67e22"))
+    fig.add_trace(go.Scatter(name="Net Sales", x=pivot["Month_label"], y=pivot["Net Sales"], mode="lines+markers", line=dict(color="#4fc3f7", width=2)))
+    fig.update_layout(
+        barmode="stack", template="plotly_dark",
+        plot_bgcolor="#1A1A1A", paper_bgcolor="#1A1A1A",
+        font=dict(color="#aaa"), legend=dict(orientation="h"),
+        margin=dict(t=30,b=30,l=10,r=10), height=360,
+        xaxis=dict(gridcolor="#333"), yaxis=dict(gridcolor="#333"),
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+    # month-wise table
+    months_sorted = [m for m in order if m in pivot["Month_label"].values]
+    pivot = pivot.set_index("Month_label")
+    metrics = [("Net Sales","Net Sales"),("COGS","COGS"),("GM","Gross Margin"),
+               ("CM1","CM1"),("Ad Spend","Ad Spend"),("CM2","CM2")]
+
+    heads = "".join(f"<th>{m}</th>" for m in months_sorted)
+    body = ""
+    for key, label in metrics:
+        is_tot = key in ["GM","CM1","CM2"]
+        cls = "total-row" if is_tot else ""
+        cells = ""
+        for m in months_sorted:
+            v = pivot.loc[m, key] if m in pivot.index else 0
+            nsv = pivot.loc[m, "Net Sales"] if m in pivot.index else 1
+            pct = v/nsv*100 if nsv else 0
+            cells += f"<td>{fmt_lacs(v)}<br><span class='percent'>{fmt_pct(pct)}</span></td>"
+        body += f"<tr class='{cls}'><td>{label}</td>{cells}</tr>"
+
+    st.markdown(f"""
+    <table class='pnl-table'>
+      <thead><tr><th>Metric</th>{heads}</tr></thead>
+      <tbody>{body}</tbody>
+    </table>""", unsafe_allow_html=True)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# VIEW: Month Trend
+# ═══════════════════════════════════════════════════════════════════════════════
+elif view == "Month Trend":
+    st.subheader("Monthly Trend — All Channels")
+
+    monthly = df.groupby(["Month_label","Month_sort"])[["Net Sales","GM","CM1","CM2","Ad Spend"]].sum().reset_index()
+    monthly = monthly.sort_values("Month_sort")
+
+    metric = st.selectbox("Metric", ["Net Sales","GM","CM1","CM2","Ad Spend"])
+
+    fig = go.Figure()
+    fig.add_trace(go.Bar(
+        x=monthly["Month_label"], y=monthly[metric]/100000,
+        marker_color=GOLD, name=metric
+    ))
+    fig.update_layout(
+        template="plotly_dark", plot_bgcolor="#1A1A1A", paper_bgcolor="#1A1A1A",
+        font=dict(color="#aaa"), yaxis_title="₹ Lakhs",
+        margin=dict(t=30,b=30,l=10,r=10), height=380,
+        xaxis=dict(gridcolor="#333"), yaxis=dict(gridcolor="#333"),
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+    # by channel line
+    st.markdown("**By Channel**")
+    ch_monthly = df.groupby(["Channel","Month_label","Month_sort"])[metric].sum().reset_index()
+    ch_monthly = ch_monthly.sort_values("Month_sort")
+
+    fig2 = px.line(ch_monthly, x="Month_label", y=metric, color="Channel",
+                   color_discrete_sequence=[GOLD,"#e67e22","#4fc3f7","#81c784","#ce93d8","#ef9a9a"])
+    fig2.update_layout(
+        template="plotly_dark", plot_bgcolor="#1A1A1A", paper_bgcolor="#1A1A1A",
+        font=dict(color="#aaa"), margin=dict(t=20,b=30,l=10,r=10), height=350,
+        xaxis=dict(gridcolor="#333"), yaxis=dict(gridcolor="#333"),
+        legend=dict(orientation="h"),
+    )
+    st.plotly_chart(fig2, use_container_width=True)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# VIEW: Channel Mix
+# ═══════════════════════════════════════════════════════════════════════════════
+elif view == "Channel Mix":
+    st.subheader("Channel Mix")
+
+    ch_agg = df.groupby("Channel")[["Net Sales","CM1","CM2","Ad Spend","Quantity"]].sum().reset_index()
+
+    col1, col2 = st.columns(2)
+    with col1:
+        fig = px.pie(ch_agg, names="Channel", values="Net Sales", title="Revenue Split",
+                     color_discrete_sequence=[GOLD,"#e67e22","#4fc3f7","#81c784","#ce93d8","#ef9a9a","#fff176"])
+        fig.update_layout(template="plotly_dark", paper_bgcolor="#1A1A1A", font=dict(color="#aaa"),
+                          margin=dict(t=40,b=10), height=340)
+        st.plotly_chart(fig, use_container_width=True)
+
+    with col2:
+        fig = px.pie(ch_agg, names="Channel", values="CM2", title="CM2 Split",
+                     color_discrete_sequence=[GOLD,"#e67e22","#4fc3f7","#81c784","#ce93d8","#ef9a9a","#fff176"])
+        fig.update_layout(template="plotly_dark", paper_bgcolor="#1A1A1A", font=dict(color="#aaa"),
+                          margin=dict(t=40,b=10), height=340)
+        st.plotly_chart(fig, use_container_width=True)
+
+    # bar: CM1% by channel
+    ch_agg["CM1%"] = ch_agg["CM1"] / ch_agg["Net Sales"] * 100
+    ch_agg["CM2%"] = ch_agg["CM2"] / ch_agg["Net Sales"] * 100
+    ch_agg = ch_agg.sort_values("Net Sales", ascending=True)
+
+    fig3 = go.Figure()
+    fig3.add_trace(go.Bar(name="CM1%", x=ch_agg["CM1%"], y=ch_agg["Channel"],
+                          orientation="h", marker_color=GOLD))
+    fig3.add_trace(go.Bar(name="CM2%", x=ch_agg["CM2%"], y=ch_agg["Channel"],
+                          orientation="h", marker_color="#e67e22"))
+    fig3.update_layout(
+        barmode="group", template="plotly_dark",
+        plot_bgcolor="#1A1A1A", paper_bgcolor="#1A1A1A",
+        font=dict(color="#aaa"), xaxis_title="% of Net Sales",
+        margin=dict(t=20,b=30,l=10,r=10), height=320,
+        legend=dict(orientation="h"),
+    )
+    st.plotly_chart(fig3, use_container_width=True)
+
+
+# ─── Footer ───────────────────────────────────────────────────────────────────
+st.markdown(f"""
+<hr style='border-color:#333;margin-top:40px;'>
+<div style='text-align:center;color:#555;font-size:11px;'>
+  Kenaz Perfumes · One Guardian Brands · FY 25-26 P&L Analytics
+</div>""", unsafe_allow_html=True)
