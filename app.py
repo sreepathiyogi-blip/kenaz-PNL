@@ -78,7 +78,7 @@ def xlsb_to_date(n):
 def L(v):
     """Format as Lakhs with 2 decimals"""
     if pd.isna(v) or v == 0: return "-"
-    return f"{v/100000:,.2f}"
+    return f"{v:,.2f}"
 
 def Lbold(v):
     neg = v < 0
@@ -408,7 +408,7 @@ def build_pnl_table(df, months, channels):
     rows_html = ""
 
     # MRP Sales
-    rows_html += data_row("MRP Sales", lambda m: v("MRP Sales",m)/100000, lambda: tot_mrp/100000)
+    rows_html += data_row("MRP Sales", lambda m: v("MRP Sales",m), lambda: tot_mrp)
     # Quantity
     rows_html += data_row("Quantity",  lambda m: v("Quantity",m), lambda: tot.get("Quantity",0),
                           fmt_fn=lambda x: f"{int(x):,}" if not pd.isna(x) and x!=0 else "-")
@@ -425,13 +425,13 @@ def build_pnl_table(df, months, channels):
     rows_html += gap()
 
     # Net Sales
-    rows_html += data_row("Net Sales", lambda m: v("Net Sales",m)/100000, lambda: tot_ns/100000,
+    rows_html += data_row("Net Sales", lambda m: v("Net Sales",m), lambda: tot_ns,
                           cls="total-row")
 
     rows_html += gap()
 
     # COGS
-    rows_html += data_row("Less: COGS", lambda m: v("COGS",m)/100000, lambda: tot.get("COGS",0)/100000,
+    rows_html += data_row("Less: COGS", lambda m: v("COGS",m), lambda: tot.get("COGS",0),
                           color_fn=True, inverse=True)
     rows_html += pct_row("COGS %",
                          lambda m: v("COGS",m)/nsv(m)*100,
@@ -441,8 +441,8 @@ def build_pnl_table(df, months, channels):
     rows_html += gap()
 
     # Material Margin
-    rows_html += data_row("Material Margins", lambda m: mat_margin(m)/100000,
-                          lambda: T(mat_margin)/100000, cls="total-row", color_fn=True)
+    rows_html += data_row("Material Margins", lambda m: mat_margin(m),
+                          lambda: T(mat_margin), cls="total-row", color_fn=True)
     rows_html += pct_row("Material Margins (%)",
                          lambda m: mat_margin(m)/nsv(m)*100,
                          lambda: T(mat_margin)/tot_ns*100 if tot_ns else np.nan)
@@ -450,12 +450,12 @@ def build_pnl_table(df, months, channels):
     rows_html += gap()
 
     # Freight Inward + Wages
-    rows_html += data_row("Less: Freight Inwards", lambda m: v("Freight Inward",m)/100000,
-                          lambda: tot.get("Freight Inward",0)/100000, color_fn=True, inverse=True)
-    rows_html += data_row("Less: Wages - Fixed", lambda m: v("Wages",m)/100000,
-                          lambda: tot.get("Wages",0)/100000, color_fn=True, inverse=True)
-    rows_html += data_row("Freight Inwards & Wages Total", lambda m: fw(m)/100000,
-                          lambda: T(fw)/100000, color_fn=True, inverse=True)
+    rows_html += data_row("Less: Freight Inwards", lambda m: v("Freight Inward",m),
+                          lambda: tot.get("Freight Inward",0), color_fn=True, inverse=True)
+    rows_html += data_row("Less: Wages - Fixed", lambda m: v("Wages",m),
+                          lambda: tot.get("Wages",0), color_fn=True, inverse=True)
+    rows_html += data_row("Freight Inwards & Wages Total", lambda m: fw(m),
+                          lambda: T(fw), color_fn=True, inverse=True)
     rows_html += pct_row("Inward %age",
                          lambda m: fw(m)/nsv(m)*100,
                          lambda: T(fw)/tot_ns*100 if tot_ns else np.nan,
@@ -464,8 +464,8 @@ def build_pnl_table(df, months, channels):
     rows_html += gap()
 
     # Gross Margin
-    rows_html += data_row("Gross Margins", lambda m: gm(m)/100000,
-                          lambda: T(gm)/100000, cls="total-row", color_fn=True)
+    rows_html += data_row("Gross Margins", lambda m: gm(m),
+                          lambda: T(gm), cls="total-row", color_fn=True)
     rows_html += pct_row("Gross Margins (%)",
                          lambda m: gm(m)/nsv(m)*100,
                          lambda: T(gm)/tot_ns*100 if tot_ns else np.nan)
@@ -473,15 +473,15 @@ def build_pnl_table(df, months, channels):
     rows_html += gap()
 
     # C&L breakdown
-    rows_html += data_row("Less: Commission Expense",        lambda m: v("Commission",m)/100000,     lambda: tot.get("Commission",0)/100000,     color_fn=True, inverse=True)
-    rows_html += data_row("Less: Payment Gateway Charges",   lambda m: v("Payment Gateway",m)/100000,lambda: tot.get("Payment Gateway",0)/100000,color_fn=True, inverse=True)
-    rows_html += data_row("Less: Shipping Charges",          lambda m: v("Shipping",m)/100000,       lambda: tot.get("Shipping",0)/100000,       color_fn=True, inverse=True)
-    rows_html += data_row("Less: Bulk Logistic Cost",        lambda m: v("Bulk Logistic",m)/100000,  lambda: tot.get("Bulk Logistic",0)/100000,  color_fn=True, inverse=True)
-    rows_html += data_row("Less: Packaging Cost",            lambda m: v("Packaging",m)/100000,      lambda: tot.get("Packaging",0)/100000,      color_fn=True, inverse=True)
-    rows_html += data_row("Less: Warehousing Charges",       lambda m: v("Warehousing",m)/100000,    lambda: tot.get("Warehousing",0)/100000,    color_fn=True, inverse=True)
-    rows_html += data_row("Less: Rebate",                    lambda m: v("Rebate",m)/100000,         lambda: tot.get("Rebate",0)/100000,         color_fn=True, inverse=True)
-    rows_html += data_row("Less: Others",                    lambda m: v("Others",m)/100000,         lambda: tot.get("Others",0)/100000,         color_fn=True, inverse=True)
-    rows_html += data_row("Commission & Logistics Total",    lambda m: cnl(m)/100000,                lambda: T(cnl)/100000,                      color_fn=True, inverse=True)
+    rows_html += data_row("Less: Commission Expense",        lambda m: v("Commission",m),     lambda: tot.get("Commission",0),     color_fn=True, inverse=True)
+    rows_html += data_row("Less: Payment Gateway Charges",   lambda m: v("Payment Gateway",m),lambda: tot.get("Payment Gateway",0),color_fn=True, inverse=True)
+    rows_html += data_row("Less: Shipping Charges",          lambda m: v("Shipping",m),       lambda: tot.get("Shipping",0),       color_fn=True, inverse=True)
+    rows_html += data_row("Less: Bulk Logistic Cost",        lambda m: v("Bulk Logistic",m),  lambda: tot.get("Bulk Logistic",0),  color_fn=True, inverse=True)
+    rows_html += data_row("Less: Packaging Cost",            lambda m: v("Packaging",m),      lambda: tot.get("Packaging",0),      color_fn=True, inverse=True)
+    rows_html += data_row("Less: Warehousing Charges",       lambda m: v("Warehousing",m),    lambda: tot.get("Warehousing",0),    color_fn=True, inverse=True)
+    rows_html += data_row("Less: Rebate",                    lambda m: v("Rebate",m),         lambda: tot.get("Rebate",0),         color_fn=True, inverse=True)
+    rows_html += data_row("Less: Others",                    lambda m: v("Others",m),         lambda: tot.get("Others",0),         color_fn=True, inverse=True)
+    rows_html += data_row("Commission & Logistics Total",    lambda m: cnl(m),                lambda: T(cnl),                      color_fn=True, inverse=True)
     rows_html += pct_row("Commission & Logistics %",
                          lambda m: cnl(m)/nsv(m)*100,
                          lambda: T(cnl)/tot_ns*100 if tot_ns else np.nan,
@@ -490,7 +490,7 @@ def build_pnl_table(df, months, channels):
     rows_html += gap()
 
     # CM1
-    rows_html += data_row("CM1", lambda m: cm1(m)/100000, lambda: T(cm1)/100000,
+    rows_html += data_row("CM1", lambda m: cm1(m), lambda: T(cm1),
                           cls="total-row", color_fn=True,
                           fmt_fn=lambda x: Lbold(x) if not pd.isna(x) else "-")
     rows_html += pct_row("CM1 (%)",
@@ -500,8 +500,8 @@ def build_pnl_table(df, months, channels):
     rows_html += gap()
 
     # Ad Spend / ACOS
-    rows_html += data_row("Less: Performance Marketing", lambda m: v("Ad Spend",m)/100000,
-                          lambda: tot.get("Ad Spend",0)/100000, color_fn=True, inverse=True)
+    rows_html += data_row("Less: Performance Marketing", lambda m: v("Ad Spend",m),
+                          lambda: tot.get("Ad Spend",0), color_fn=True, inverse=True)
     rows_html += pct_row("ACOS (%)",
                          lambda m: v("Ad Spend",m)/nsv(m)*100,
                          lambda: tot.get("Ad Spend",0)/tot_ns*100 if tot_ns else np.nan,
@@ -510,7 +510,7 @@ def build_pnl_table(df, months, channels):
     rows_html += gap()
 
     # CM2
-    rows_html += data_row("CM2", lambda m: cm2(m)/100000, lambda: T(cm2)/100000,
+    rows_html += data_row("CM2", lambda m: cm2(m), lambda: T(cm2),
                           cls="total-row", color_fn=True,
                           fmt_fn=lambda x: Lbold(x) if not pd.isna(x) else "-")
     rows_html += pct_row("CM2 (%)",
@@ -520,7 +520,7 @@ def build_pnl_table(df, months, channels):
     return f"""
     <div style='overflow-x:auto'>
     <table class='pnl-table'>
-      {th("Particulars (INR Lacs)")}
+      {th("Particulars (INR)")}
       <tbody>{rows_html}</tbody>
     </table>
     </div>"""
@@ -725,7 +725,7 @@ elif view == "Product P&L":
     def style_lacs(v):
         try:
             f = float(v)
-            return f"{f/100000:,.2f}" if f != 0 else "-"
+            return f"{f:,.2f}" if f != 0 else "-"
         except: return str(v)
 
     heads = "".join(f"<th>{m}</th>" for m in month_ord) + "<th>Total</th>"
@@ -808,39 +808,39 @@ elif view == "Product P&L":
     ph = "".join(f"<th>{m}</th>" for m in prod_months) + "<th>Total</th>"
     pb = ""
 
-    pb += prow("MRP Sales",     lambda m: pv("MRP Sales",m)/100000)
+    pb += prow("MRP Sales",     lambda m: pv("MRP Sales",m))
     pb += prow("Quantity",      lambda m: pv("Quantity",m),
                fmt_fn=lambda x: f"{int(x):,}" if x else "-")
     pb += f"<tr class='section-gap'>{'<td></td>'*(len(prod_months)+2)}</tr>"
-    pb += prow("Net Sales",     lambda m: pv("Net Sales",m)/100000, is_total=True)
+    pb += prow("Net Sales",     lambda m: pv("Net Sales",m), is_total=True)
 
     pb += f"<tr class='section-gap'>{'<td></td>'*(len(prod_months)+2)}</tr>"
-    pb += prow("Less: COGS",    lambda m: pv("COGS",m)/100000, inverse=True,
+    pb += prow("Less: COGS",    lambda m: pv("COGS",m), inverse=True,
                pct_fn=lambda m,ns: safe_pct(pv("COGS",m if m else prod_months[-1])/1 if m else
                                    sum(pv("COGS",mx) for mx in prod_months), ns))
-    pb += prow("Material Margins", lambda m: mat_m(m)/100000, is_total=True,
+    pb += prow("Material Margins", lambda m: mat_m(m), is_total=True,
                pct_fn=lambda m,ns: safe_pct(mat_m(m) if m else sum(mat_m(mx) for mx in prod_months), ns))
     pb += f"<tr class='section-gap'>{'<td></td>'*(len(prod_months)+2)}</tr>"
-    pb += prow("Less: Freight+Wages", lambda m: fw_m(m)/100000, inverse=True,
+    pb += prow("Less: Freight+Wages", lambda m: fw_m(m), inverse=True,
                pct_fn=lambda m,ns: safe_pct(fw_m(m) if m else sum(fw_m(mx) for mx in prod_months), ns))
-    pb += prow("Gross Margin",  lambda m: gm_m(m)/100000,  is_total=True,
+    pb += prow("Gross Margin",  lambda m: gm_m(m),  is_total=True,
                pct_fn=lambda m,ns: safe_pct(gm_m(m) if m else sum(gm_m(mx) for mx in prod_months), ns))
     pb += f"<tr class='section-gap'>{'<td></td>'*(len(prod_months)+2)}</tr>"
-    pb += prow("Less: Commission",    lambda m: pv("Commission",m)/100000, inverse=True)
-    pb += prow("Less: Payment GW",    lambda m: pv("Payment Gateway",m)/100000, inverse=True)
-    pb += prow("Less: Shipping",      lambda m: pv("Shipping",m)/100000, inverse=True)
-    pb += prow("Less: Bulk Logistic", lambda m: pv("Bulk Logistic",m)/100000, inverse=True)
-    pb += prow("Less: Packaging",     lambda m: pv("Packaging",m)/100000, inverse=True)
-    pb += prow("Less: Warehousing",   lambda m: pv("Warehousing",m)/100000, inverse=True)
-    pb += prow("Less: Others",        lambda m: pv("Others",m)/100000, inverse=True)
-    pb += prow("C&L Total",    lambda m: cnl_m(m)/100000, inverse=True,
+    pb += prow("Less: Commission",    lambda m: pv("Commission",m), inverse=True)
+    pb += prow("Less: Payment GW",    lambda m: pv("Payment Gateway",m), inverse=True)
+    pb += prow("Less: Shipping",      lambda m: pv("Shipping",m), inverse=True)
+    pb += prow("Less: Bulk Logistic", lambda m: pv("Bulk Logistic",m), inverse=True)
+    pb += prow("Less: Packaging",     lambda m: pv("Packaging",m), inverse=True)
+    pb += prow("Less: Warehousing",   lambda m: pv("Warehousing",m), inverse=True)
+    pb += prow("Less: Others",        lambda m: pv("Others",m), inverse=True)
+    pb += prow("C&L Total",    lambda m: cnl_m(m), inverse=True,
                pct_fn=lambda m,ns: safe_pct(cnl_m(m) if m else sum(cnl_m(mx) for mx in prod_months), ns))
-    pb += prow("CM1",          lambda m: cm1_m(m)/100000, is_total=True,
+    pb += prow("CM1",          lambda m: cm1_m(m), is_total=True,
                pct_fn=lambda m,ns: safe_pct(cm1_m(m) if m else sum(cm1_m(mx) for mx in prod_months), ns))
     pb += f"<tr class='section-gap'>{'<td></td>'*(len(prod_months)+2)}</tr>"
-    pb += prow("Less: Ad Spend", lambda m: pv("Ad Spend",m)/100000, inverse=True,
+    pb += prow("Less: Ad Spend", lambda m: pv("Ad Spend",m), inverse=True,
                pct_fn=lambda m,ns: safe_pct(pv("Ad Spend",m) if m else sum(pv("Ad Spend",mx) for mx in prod_months), ns))
-    pb += prow("CM2",            lambda m: cm2_m(m)/100000, is_total=True,
+    pb += prow("CM2",            lambda m: cm2_m(m), is_total=True,
                pct_fn=lambda m,ns: safe_pct(cm2_m(m) if m else sum(cm2_m(mx) for mx in prod_months), ns))
 
     st.markdown(f"""
