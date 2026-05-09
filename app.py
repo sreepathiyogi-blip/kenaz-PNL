@@ -579,6 +579,14 @@ with st.sidebar:
 
     df_all = enrich(df_raw)
 
+    with st.expander("🔍 Debug: Raw sheet data", expanded=False):
+        st.write(f"Rows in sheet: {len(df_raw)}")
+        st.write(f"Columns: {list(df_raw.columns)}")
+        if not df_raw.empty:
+            st.write("Net Sales sample:", df_raw["Net Sales"].head(5).tolist() if "Net Sales" in df_raw.columns else "col missing")
+            st.write("Net Sales dtype:", str(df_raw["Net Sales"].dtype) if "Net Sales" in df_raw.columns else "col missing")
+            st.dataframe(df_raw.head(10))
+
     st.markdown("### 🔍 Filters")
     channels_avail = sorted(df_all["Channel"].unique())
     months_df = df_all[["Month_name","Month_sort"]].drop_duplicates().sort_values("Month_sort")
