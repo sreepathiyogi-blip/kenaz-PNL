@@ -188,9 +188,19 @@ def parse_xlsb(file_bytes: bytes) -> pd.DataFrame:
     df["Month_label"]  = df["Month_date"].apply(lambda d: d.strftime("%b-%y") if d else "Unknown")
     df["Month_serial"] = df["Month"].apply(lambda x: str(int(float(x))) if pd.notna(x) else "")
 
+    # handle both formats: old has Years/Quarters cols, new format doesn't
+    if "Years (Month)" in df.columns:
+        year_col    = df["Years (Month)"].astype(str)
+        quarter_col = df["Quarters (Month)"].astype(str)
+    else:
+        year_col    = df["Month_date"].apply(lambda d: str(d.year) if d else "")
+        quarter_col = df["Month_date"].apply(
+            lambda d: f"Qtr{((d.month - 1) // 3) + 1}" if d else ""
+        )
+
     return pd.DataFrame({
-        "Year":            df["Years (Month)"].astype(str),
-        "Quarter":         df["Quarters (Month)"].astype(str),
+        "Year":            year_col,
+        "Quarter":         quarter_col,
         "Month_name":      df["Month_label"],
         "Month_serial":    df["Month_serial"],
         "Channel":         df["Channel"].astype(str),
