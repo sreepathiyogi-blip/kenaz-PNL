@@ -11,16 +11,12 @@ import tempfile, os
 import warnings
 warnings.filterwarnings("ignore")
 
-# ─── Page config ─────────────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="Kenaz P&L Dashboard",
-    page_icon="🕌",
-    layout="wide",
+    page_title="Kenaz P&L Dashboard", page_icon="🕌", layout="wide",
     initial_sidebar_state="expanded",
     menu_items={"Get Help": None, "Report a bug": None, "About": "One Guardian Brands — Kenaz P&L Dashboard"},
 )
 
-# ─── Brand colors ─────────────────────────────────────────────────────────────
 GOLD  = "#C9A84C"
 CREAM = "#FFFFF8"
 DARK  = "#1A1A1A"
@@ -31,82 +27,86 @@ st.markdown(f"""
   [data-testid="stAppViewContainer"] {{ background-color:{DARK}; }}
   [data-testid="stSidebar"] {{ background-color:#222; }}
   .block-container {{ padding-top:1.5rem; }}
-  .kpi-card {{ background:{CARD};border:1px solid {GOLD}33;border-radius:10px;
-               padding:16px 20px;margin-bottom:8px; }}
+  .kpi-card {{ background:{CARD};border:1px solid {GOLD}33;border-radius:10px;padding:16px 20px;margin-bottom:8px; }}
   .kpi-label {{ color:#aaa;font-size:11px;letter-spacing:1px;text-transform:uppercase; }}
   .kpi-value {{ color:{GOLD};font-size:26px;font-weight:700;margin:4px 0; }}
   .kpi-sub   {{ color:#777;font-size:12px; }}
-  .pnl-table {{ width:100%;border-collapse:collapse;font-size:13px; }}
+  .pnl-table {{ width:100%;border-collapse:collapse;font-size:12.5px; }}
   .pnl-table th {{ background:{GOLD}22;color:{GOLD};padding:8px 12px;text-align:right;
-                   border-bottom:1px solid {GOLD}44; }}
-  .pnl-table th:first-child {{ text-align:left; }}
-  .pnl-table td {{ padding:7px 12px;text-align:right;border-bottom:1px solid #333;color:#ddd; }}
+                   border-bottom:2px solid {GOLD}55;white-space:nowrap; }}
+  .pnl-table th:first-child {{ text-align:left;min-width:220px; }}
+  .pnl-table td {{ padding:6px 12px;text-align:right;border-bottom:1px solid #2a2a2a;color:#ddd;white-space:nowrap; }}
   .pnl-table td:first-child {{ text-align:left;color:#bbb; }}
-  .pnl-table tr.total-row td {{ background:{GOLD}11;font-weight:700;color:{CREAM};
-                                 border-top:2px solid {GOLD}44; }}
-  .pnl-table tr:hover td {{ background:#2f2f2f; }}
+  .pnl-table tr.total-row td {{ background:{GOLD}18;font-weight:700;color:{CREAM};border-top:2px solid {GOLD}55;border-bottom:2px solid {GOLD}33; }}
+  .pnl-table tr.pct-row td {{ color:#888;font-size:11.5px;border-bottom:1px solid #222; }}
+  .pnl-table tr.pct-row td:first-child {{ color:#666; }}
+  .pnl-table tr.section-gap td {{ height:6px;background:{DARK};border:none; }}
+  .pnl-table tr:not(.pct-row):not(.total-row):not(.section-gap):hover td {{ background:#252525; }}
   .positive {{ color:#4caf50!important; }}
-  .negative {{ color:#f44336!important; }}
-  .percent  {{ color:#aaa!important;font-size:12px; }}
+  .negative {{ color:#e57373!important; }}
   .header-bar {{ background:{GOLD};padding:12px 20px;border-radius:8px;color:#1A1A1A;
                  font-weight:800;font-size:20px;letter-spacing:1.5px;margin-bottom:20px; }}
   h1,h2,h3 {{ color:{GOLD}!important; }}
   label {{ color:#aaa!important; }}
+  .stRadio label {{ color:#ccc!important; }}
 </style>
 """, unsafe_allow_html=True)
 
 # ─── Constants ────────────────────────────────────────────────────────────────
-SCOPES = ["https://www.googleapis.com/auth/spreadsheets",
-          "https://www.googleapis.com/auth/drive"]
-
-PNL_COLS = [
-    "Year","Quarter","Month_name","Month_serial","Channel",
-    "MRP Sales","Quantity","Net Sales","COGS","Freight Inward","Wages",
-    "Commission","Payment Gateway","Shipping","Others","Ad Spend",
-    "Bulk Logistic","Packaging","Warehousing","Rebate",
-]
-
-CHANNELS = ["Website","FBA","RK","Meesho","Flipkart","Myntra PPMP"]
+SCOPES     = ["https://www.googleapis.com/auth/spreadsheets","https://www.googleapis.com/auth/drive"]
+SHEET_KEY  = "10qFitbppdVbNK0w67q1HFK-l7N1uAzHJ0mkyB2XImJQ"
+CHANNELS   = ["Website","Amazon","Meesho","Flipkart","Myntra PPMP"]
+PNL_COLS   = ["Month_serial","Month_name","Channel","MRP Sales","Quantity","Net Sales",
+               "COGS","Freight Inward","Wages","Commission","Payment Gateway","Shipping",
+               "Others","Ad Spend","Bulk Logistic","Packaging","Warehousing","Rebate"]
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 def xlsb_to_date(n):
-    try:
-        return date(1899, 12, 30) + timedelta(days=int(float(n)))
-    except Exception:
-        return None
+    try: return date(1899,12,30) + timedelta(days=int(float(n)))
+    except: return None
 
-def fmt_lacs(v, decimals=2):
-    if pd.isna(v) or v == 0:
-        return "-"
-    return f"Rs{v/100000:,.{decimals}f}L"
+def L(v):
+    """Format as Lakhs with 2 decimals"""
+    if pd.isna(v) or v == 0: return "-"
+    return f"{v/100000:,.2f}"
 
-def fmt_pct(v):
-    if pd.isna(v):
-        return "-"
+def Lbold(v):
+    neg = v < 0
+    s = L(abs(v)) if not pd.isna(v) else "-"
+    if s == "-": return "-"
+    return f"({s})" if neg else s
+
+def P(v):
+    """Format as percentage"""
+    if pd.isna(v): return "-"
     return f"{v:.1f}%"
 
+def INR(v):
+    if pd.isna(v) or v == 0: return "-"
+    return f"&#8377;{v:,.0f}"
 
-# ─── Google Sheets helpers (same pattern as Flipkart dashboard) ───────────────
+def color_val(v, inverse=False):
+    if pd.isna(v) or v == 0: return "#aaa"
+    pos = v > 0
+    if inverse: pos = not pos
+    return "#4caf50" if pos else "#e57373"
+
+# ─── Google Sheets ─────────────────────────────────────────────────────────────
 @st.cache_resource
 def get_gsheet_client():
-    creds = Credentials.from_service_account_info(
-        st.secrets["gcp_service_account"], scopes=SCOPES
-    )
+    creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=SCOPES)
     return gspread.authorize(creds)
-
-SHEET_KEY = "10qFitbppdVbNK0w67q1HFK-l7N1uAzHJ0mkyB2XImJQ"
 
 def get_sheet(client):
     return client.open_by_key(SHEET_KEY)
 
 @st.cache_data(ttl=300)
-def load_from_gsheet(spreadsheet_name: str = "") -> pd.DataFrame:
+def load_from_gsheet(_dummy="") -> pd.DataFrame:
     try:
         client = get_gsheet_client()
         ws = get_sheet(client).sheet1
         data = ws.get_all_records()
-        if not data:
-            return pd.DataFrame(columns=PNL_COLS)
+        if not data: return pd.DataFrame(columns=PNL_COLS)
         df = pd.DataFrame(data)
         for col in ["MRP Sales","Quantity","Net Sales","COGS","Freight Inward","Wages",
                     "Commission","Payment Gateway","Shipping","Others","Ad Spend",
@@ -118,129 +118,335 @@ def load_from_gsheet(spreadsheet_name: str = "") -> pd.DataFrame:
         st.error(f"Sheet load error: {e}")
         return pd.DataFrame(columns=PNL_COLS)
 
-def save_to_gsheet(client, new_df: pd.DataFrame, spreadsheet_name: str = ""):
-    sh = get_sheet(client)
-    ws = sh.sheet1
+def save_to_gsheet(client, new_df: pd.DataFrame):
+    sh  = get_sheet(client)
+    ws  = sh.sheet1
     existing = ws.get_all_records()
-
     new_df = new_df.copy()
     new_df["Month_serial"] = new_df["Month_serial"].astype(str)
-
     if not existing:
         ws.update([new_df.columns.tolist()] + new_df.astype(str).values.tolist())
         return len(new_df), 0
-
     ex = pd.DataFrame(existing)
     ex["Month_serial"] = ex["Month_serial"].astype(str)
-
-    # deduplicate on Month_serial + Channel
-    ex_keys  = ex["Month_serial"].astype(str) + "_" + ex["Channel"].astype(str)
-    new_keys = new_df["Month_serial"].astype(str) + "_" + new_df["Channel"].astype(str)
+    ex_keys  = ex["Month_serial"]  + "_" + ex["Channel"].astype(str)
+    new_keys = new_df["Month_serial"] + "_" + new_df["Channel"].astype(str)
     truly_new = new_df[~new_keys.isin(ex_keys)]
-
-    if len(truly_new) == 0:
-        return 0, len(new_df)
-
+    if len(truly_new) == 0: return 0, len(new_df)
     all_cols = list(dict.fromkeys(ex.columns.tolist() + truly_new.columns.tolist()))
-    combined = pd.concat([
-        ex.reindex(columns=all_cols, fill_value=""),
-        truly_new.reindex(columns=all_cols, fill_value=""),
-    ], ignore_index=True)
+    combined = pd.concat([ex.reindex(columns=all_cols, fill_value=""),
+                          truly_new.reindex(columns=all_cols, fill_value="")], ignore_index=True)
     combined = combined.sort_values(["Month_serial","Channel"])
     ws.clear()
     ws.update([combined.columns.tolist()] + combined.astype(str).values.tolist())
     return len(truly_new), len(new_df) - len(truly_new)
 
-
 # ─── XLSB Parser ──────────────────────────────────────────────────────────────
 def parse_xlsb(file_bytes: bytes) -> pd.DataFrame:
     with tempfile.NamedTemporaryFile(suffix=".xlsb", delete=False) as tmp:
-        tmp.write(file_bytes)
-        tmp_path = tmp.name
-
+        tmp.write(file_bytes); tmp_path = tmp.name
     try:
         rows = []
         with open_workbook(tmp_path) as wb:
             with wb.get_sheet("For P&L") as ws:
-                for row in ws.rows():
-                    rows.append([c.v for c in row])
+                for row in ws.rows(): rows.append([c.v for c in row])
     finally:
         os.unlink(tmp_path)
 
     headers = rows[4]
     df = pd.DataFrame(rows[5:], columns=headers)
-
     df = df[pd.to_numeric(df["Sum of Revenue Without Tax"], errors="coerce").notna()]
     df = df[pd.to_numeric(df["Sum of Revenue Without Tax"], errors="coerce") != 0]
     df = df.dropna(subset=["Channel"])
-    df = df[df["Channel"].astype(str).isin(CHANNELS)]
+    df = df[df["Channel"].astype(str).isin(["Website","FBA","RK","Meesho","Flipkart","Myntra PPMP"])]
 
-    for col in [c for c in df.columns if isinstance(c, str) and c.startswith("Sum of")]:
+    for col in [c for c in df.columns if isinstance(c,str) and c.startswith("Sum of")]:
         df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
 
+    # combine FBA + RK → Amazon
+    df["Channel"] = df["Channel"].apply(lambda x: "Amazon" if x in ["FBA","RK"] else x)
+
     df["Month_date"]   = df["Month"].apply(xlsb_to_date)
-    df["Month_label"]  = df["Month_date"].apply(lambda d: d.strftime("%b-%y") if d else "Unknown")
+    df["Month_name"]   = df["Month_date"].apply(lambda d: d.strftime("%b-%y") if d else "Unknown")
     df["Month_serial"] = df["Month"].apply(lambda x: str(int(float(x))) if pd.notna(x) else "")
 
-    # handle both formats: old has Years/Quarters cols, new format doesn't
     if "Years (Month)" in df.columns:
         year_col    = df["Years (Month)"].astype(str)
         quarter_col = df["Quarters (Month)"].astype(str)
     else:
         year_col    = df["Month_date"].apply(lambda d: str(d.year) if d else "")
-        quarter_col = df["Month_date"].apply(
-            lambda d: f"Qtr{((d.month - 1) // 3) + 1}" if d else ""
-        )
+        quarter_col = df["Month_date"].apply(lambda d: f"Qtr{((d.month-1)//3)+1}" if d else "")
+
+    grp = df.groupby(["Month_serial","Month_name","Channel"])[
+        ["Sum of TOTAL MRP","Sum of Qty","Sum of Revenue Without Tax","Sum of COGS",
+         "Sum of Inward","Sum of Wages","Sum of commission","Sum of Payment Gateway",
+         "Sum of Shipping","Sum of others","Sum of Total Spend","Sum of Bulk Logistic Cost",
+         "Sum of Packaging Cost","Sum of Warehousing Charges","Sum of Rebate"]
+    ].sum().reset_index()
 
     return pd.DataFrame({
-        "Year":            year_col,
-        "Quarter":         quarter_col,
-        "Month_name":      df["Month_label"],
-        "Month_serial":    df["Month_serial"],
-        "Channel":         df["Channel"].astype(str),
-        "MRP Sales":       df["Sum of TOTAL MRP"],
-        "Quantity":        df["Sum of Qty"],
-        "Net Sales":       df["Sum of Revenue Without Tax"],
-        "COGS":            df["Sum of COGS"],
-        "Freight Inward":  df["Sum of Inward"],
-        "Wages":           df["Sum of Wages"],
-        "Commission":      df["Sum of commission"],
-        "Payment Gateway": df["Sum of Payment Gateway"],
-        "Shipping":        df["Sum of Shipping"],
-        "Others":          df["Sum of others"],
-        "Ad Spend":        df["Sum of Total Spend"],
-        "Bulk Logistic":   df["Sum of Bulk Logistic Cost"],
-        "Packaging":       df["Sum of Packaging Cost"],
-        "Warehousing":     df["Sum of Warehousing Charges"],
-        "Rebate":          df["Sum of Rebate"],
+        "Month_serial":    grp["Month_serial"],
+        "Month_name":      grp["Month_name"],
+        "Channel":         grp["Channel"],
+        "MRP Sales":       grp["Sum of TOTAL MRP"],
+        "Quantity":        grp["Sum of Qty"],
+        "Net Sales":       grp["Sum of Revenue Without Tax"],
+        "COGS":            grp["Sum of COGS"],
+        "Freight Inward":  grp["Sum of Inward"],
+        "Wages":           grp["Sum of Wages"],
+        "Commission":      grp["Sum of commission"],
+        "Payment Gateway": grp["Sum of Payment Gateway"],
+        "Shipping":        grp["Sum of Shipping"],
+        "Others":          grp["Sum of others"],
+        "Ad Spend":        grp["Sum of Total Spend"],
+        "Bulk Logistic":   grp["Sum of Bulk Logistic Cost"],
+        "Packaging":       grp["Sum of Packaging Cost"],
+        "Warehousing":     grp["Sum of Warehousing Charges"],
+        "Rebate":          grp["Sum of Rebate"],
     })
 
-
-# ─── Derived metrics ──────────────────────────────────────────────────────────
+# ─── Enrich ───────────────────────────────────────────────────────────────────
 def enrich(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
-    for col in ["Net Sales","COGS","Freight Inward","Wages","Commission",
-                "Payment Gateway","Shipping","Others","Ad Spend",
-                "Bulk Logistic","Packaging","Warehousing"]:
+    for col in ["Net Sales","COGS","Freight Inward","Wages","Commission","Payment Gateway",
+                "Shipping","Others","Ad Spend","Bulk Logistic","Packaging","Warehousing","Rebate","MRP Sales"]:
         df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
 
-    df["GM"]  = df["Net Sales"] - df["COGS"] - df["Freight Inward"] - df["Wages"]
-    df["CM1"] = (df["GM"] - df["Commission"] - df["Payment Gateway"]
-                 - df["Shipping"] - df["Others"]
-                 - df["Bulk Logistic"] - df["Packaging"] - df["Warehousing"])
+    df["Material Margin"] = df["Net Sales"] - df["COGS"]
+    df["Freight+Wages"]   = df["Freight Inward"] + df["Wages"]
+    df["GM"]  = df["Material Margin"] - df["Freight+Wages"]
+    df["CnL"] = (df["Commission"] + df["Payment Gateway"] + df["Shipping"] +
+                 df["Bulk Logistic"] + df["Packaging"] + df["Warehousing"] +
+                 df["Rebate"] + df["Others"])
+    df["CM1"] = df["GM"] - df["CnL"]
     df["CM2"] = df["CM1"] - df["Ad Spend"]
 
     safe = df["Net Sales"].replace(0, np.nan)
-    df["COGS%"] = df["COGS"] / safe * 100
-    df["GM%"]   = df["GM"]   / safe * 100
-    df["CM1%"]  = df["CM1"]  / safe * 100
-    df["CM2%"]  = df["CM2"]  / safe * 100
+    df["Discount%"]       = (1 - df["Net Sales"] / df["MRP Sales"].replace(0,np.nan)) * 100
+    df["COGS%"]           = df["COGS"]            / safe * 100
+    df["MatMargin%"]      = df["Material Margin"] / safe * 100
+    df["FreightWages%"]   = df["Freight+Wages"]   / safe * 100
+    df["GM%"]             = df["GM"]              / safe * 100
+    df["CnL%"]            = df["CnL"]             / safe * 100
+    df["CM1%"]            = df["CM1"]             / safe * 100
+    df["ACOS%"]           = df["Ad Spend"]        / safe * 100
+    df["CM2%"]            = df["CM2"]             / safe * 100
+    df["ASP"]             = df["Net Sales"]        / df["Quantity"].replace(0, np.nan)
 
     df["Month_sort"] = df["Month_serial"].apply(
         lambda s: str(int(float(s))).zfill(10) if str(s).strip() not in ["","nan"] else "9999999999"
     )
     return df
 
+# ─── P&L Table Builder ────────────────────────────────────────────────────────
+def build_pnl_table(df, months, channels):
+    """Build the full P&L table HTML exactly like the format requested."""
+
+    # aggregate by month × channel
+    grp = df.groupby(["Month_name","Month_sort"]).apply(
+        lambda g: pd.Series({
+            "MRP Sales":       g["MRP Sales"].sum(),
+            "Quantity":        g["Quantity"].sum(),
+            "Net Sales":       g["Net Sales"].sum(),
+            "COGS":            g["COGS"].sum(),
+            "Freight Inward":  g["Freight Inward"].sum(),
+            "Wages":           g["Wages"].sum(),
+            "Commission":      g["Commission"].sum(),
+            "Payment Gateway": g["Payment Gateway"].sum(),
+            "Shipping":        g["Shipping"].sum(),
+            "Bulk Logistic":   g["Bulk Logistic"].sum(),
+            "Packaging":       g["Packaging"].sum(),
+            "Warehousing":     g["Warehousing"].sum(),
+            "Rebate":          g["Rebate"].sum(),
+            "Others":          g["Others"].sum(),
+            "Ad Spend":        g["Ad Spend"].sum(),
+        })
+    ).reset_index().sort_values("Month_sort")
+
+    # reindex to selected months in order
+    grp = grp[grp["Month_name"].isin(months)]
+    month_order = grp.sort_values("Month_sort")["Month_name"].tolist()
+    grp = grp.set_index("Month_name")
+
+    def v(metric, m):
+        return grp.loc[m, metric] if m in grp.index else 0
+
+    def nsv(m): return v("Net Sales", m) or np.nan
+    def mrp(m): return v("MRP Sales", m) or np.nan
+
+    # derived per month
+    def mat_margin(m): return v("Net Sales",m) - v("COGS",m)
+    def fw(m):         return v("Freight Inward",m) + v("Wages",m)
+    def gm(m):         return mat_margin(m) - fw(m)
+    def cnl(m):        return (v("Commission",m) + v("Payment Gateway",m) + v("Shipping",m) +
+                               v("Bulk Logistic",m) + v("Packaging",m) + v("Warehousing",m) +
+                               v("Rebate",m) + v("Others",m))
+    def cm1(m):        return gm(m) - cnl(m)
+    def cm2(m):        return cm1(m) - v("Ad Spend",m)
+
+    # total column
+    tot = {k: grp[k].sum() for k in grp.columns if k != "Month_sort"}
+    def T(fn): return sum(fn(m) for m in month_order)
+
+    months_cols = month_order  # display columns
+
+    def th(label):
+        heads = "".join(f"<th>{m}</th>" for m in months_cols)
+        return f"<thead><tr><th>{label}</th>{heads}<th>Total</th></tr></thead>"
+
+    def data_row(label, vals_fn, total_fn, fmt_fn=L, cls="", color_fn=None, inverse=False):
+        cells = ""
+        for m in months_cols:
+            val = vals_fn(m)
+            s   = fmt_fn(val)
+            if color_fn:
+                c = color_val(val, inverse)
+                cells += f"<td style='color:{c}'>{s}</td>"
+            else:
+                cells += f"<td>{s}</td>"
+        tv = total_fn()
+        ts = fmt_fn(tv)
+        if color_fn:
+            tc = color_val(tv, inverse)
+            return f"<tr class='{cls}'><td>{label}</td>{cells}<td style='color:{tc}'>{ts}</td></tr>"
+        return f"<tr class='{cls}'><td>{label}</td>{cells}<td>{ts}</td></tr>"
+
+    def pct_row(label, pct_fn, total_pct_fn, cls="pct-row", inverse=False):
+        cells = ""
+        for m in months_cols:
+            val = pct_fn(m)
+            c   = color_val(val, inverse)
+            cells += f"<td style='color:{c}'>{P(val)}</td>"
+        tv = total_pct_fn()
+        tc = color_val(tv, inverse)
+        return f"<tr class='{cls}'><td>{label}</td>{cells}<td style='color:{tc}'>{P(tv)}</td></tr>"
+
+    def gap():
+        n = len(months_cols) + 2
+        return f"<tr class='section-gap'>{'<td></td>'*n}</tr>"
+
+    tot_ns  = tot.get("Net Sales",0)
+    tot_mrp = tot.get("MRP Sales",0)
+
+    rows_html = ""
+
+    # MRP Sales
+    rows_html += data_row("MRP Sales", lambda m: v("MRP Sales",m)/100000, lambda: tot_mrp/100000)
+    # Quantity
+    rows_html += data_row("Quantity",  lambda m: v("Quantity",m), lambda: tot.get("Quantity",0),
+                          fmt_fn=lambda x: f"{int(x):,}" if not pd.isna(x) and x!=0 else "-")
+    # ASP
+    rows_html += data_row("ASP", lambda m: v("Net Sales",m)/v("Quantity",m) if v("Quantity",m) else np.nan,
+                          lambda: tot_ns/tot.get("Quantity",1) if tot.get("Quantity") else np.nan,
+                          fmt_fn=lambda x: f"&#8377;{x:,.0f}" if not pd.isna(x) else "-")
+    # Discount %
+    rows_html += pct_row("Discount %",
+                         lambda m: (1 - v("Net Sales",m)/mrp(m))*100 if mrp(m) else np.nan,
+                         lambda: (1 - tot_ns/tot_mrp)*100 if tot_mrp else np.nan,
+                         inverse=True)
+
+    rows_html += gap()
+
+    # Net Sales
+    rows_html += data_row("Net Sales", lambda m: v("Net Sales",m)/100000, lambda: tot_ns/100000,
+                          cls="total-row")
+
+    rows_html += gap()
+
+    # COGS
+    rows_html += data_row("Less: COGS", lambda m: v("COGS",m)/100000, lambda: tot.get("COGS",0)/100000,
+                          color_fn=True, inverse=True)
+    rows_html += pct_row("COGS %",
+                         lambda m: v("COGS",m)/nsv(m)*100,
+                         lambda: tot.get("COGS",0)/tot_ns*100 if tot_ns else np.nan,
+                         inverse=True)
+
+    rows_html += gap()
+
+    # Material Margin
+    rows_html += data_row("Material Margins", lambda m: mat_margin(m)/100000,
+                          lambda: T(mat_margin)/100000, cls="total-row", color_fn=True)
+    rows_html += pct_row("Material Margins (%)",
+                         lambda m: mat_margin(m)/nsv(m)*100,
+                         lambda: T(mat_margin)/tot_ns*100 if tot_ns else np.nan)
+
+    rows_html += gap()
+
+    # Freight Inward + Wages
+    rows_html += data_row("Less: Freight Inwards", lambda m: v("Freight Inward",m)/100000,
+                          lambda: tot.get("Freight Inward",0)/100000, color_fn=True, inverse=True)
+    rows_html += data_row("Less: Wages - Fixed", lambda m: v("Wages",m)/100000,
+                          lambda: tot.get("Wages",0)/100000, color_fn=True, inverse=True)
+    rows_html += data_row("Freight Inwards & Wages Total", lambda m: fw(m)/100000,
+                          lambda: T(fw)/100000, color_fn=True, inverse=True)
+    rows_html += pct_row("Inward %age",
+                         lambda m: fw(m)/nsv(m)*100,
+                         lambda: T(fw)/tot_ns*100 if tot_ns else np.nan,
+                         inverse=True)
+
+    rows_html += gap()
+
+    # Gross Margin
+    rows_html += data_row("Gross Margins", lambda m: gm(m)/100000,
+                          lambda: T(gm)/100000, cls="total-row", color_fn=True)
+    rows_html += pct_row("Gross Margins (%)",
+                         lambda m: gm(m)/nsv(m)*100,
+                         lambda: T(gm)/tot_ns*100 if tot_ns else np.nan)
+
+    rows_html += gap()
+
+    # C&L breakdown
+    rows_html += data_row("Less: Commission Expense",        lambda m: v("Commission",m)/100000,     lambda: tot.get("Commission",0)/100000,     color_fn=True, inverse=True)
+    rows_html += data_row("Less: Payment Gateway Charges",   lambda m: v("Payment Gateway",m)/100000,lambda: tot.get("Payment Gateway",0)/100000,color_fn=True, inverse=True)
+    rows_html += data_row("Less: Shipping Charges",          lambda m: v("Shipping",m)/100000,       lambda: tot.get("Shipping",0)/100000,       color_fn=True, inverse=True)
+    rows_html += data_row("Less: Bulk Logistic Cost",        lambda m: v("Bulk Logistic",m)/100000,  lambda: tot.get("Bulk Logistic",0)/100000,  color_fn=True, inverse=True)
+    rows_html += data_row("Less: Packaging Cost",            lambda m: v("Packaging",m)/100000,      lambda: tot.get("Packaging",0)/100000,      color_fn=True, inverse=True)
+    rows_html += data_row("Less: Warehousing Charges",       lambda m: v("Warehousing",m)/100000,    lambda: tot.get("Warehousing",0)/100000,    color_fn=True, inverse=True)
+    rows_html += data_row("Less: Rebate",                    lambda m: v("Rebate",m)/100000,         lambda: tot.get("Rebate",0)/100000,         color_fn=True, inverse=True)
+    rows_html += data_row("Less: Others",                    lambda m: v("Others",m)/100000,         lambda: tot.get("Others",0)/100000,         color_fn=True, inverse=True)
+    rows_html += data_row("Commission & Logistics Total",    lambda m: cnl(m)/100000,                lambda: T(cnl)/100000,                      color_fn=True, inverse=True)
+    rows_html += pct_row("Commission & Logistics %",
+                         lambda m: cnl(m)/nsv(m)*100,
+                         lambda: T(cnl)/tot_ns*100 if tot_ns else np.nan,
+                         inverse=True)
+
+    rows_html += gap()
+
+    # CM1
+    rows_html += data_row("CM1", lambda m: cm1(m)/100000, lambda: T(cm1)/100000,
+                          cls="total-row", color_fn=True,
+                          fmt_fn=lambda x: Lbold(x) if not pd.isna(x) else "-")
+    rows_html += pct_row("CM1 (%)",
+                         lambda m: cm1(m)/nsv(m)*100,
+                         lambda: T(cm1)/tot_ns*100 if tot_ns else np.nan)
+
+    rows_html += gap()
+
+    # Ad Spend / ACOS
+    rows_html += data_row("Less: Performance Marketing", lambda m: v("Ad Spend",m)/100000,
+                          lambda: tot.get("Ad Spend",0)/100000, color_fn=True, inverse=True)
+    rows_html += pct_row("ACOS (%)",
+                         lambda m: v("Ad Spend",m)/nsv(m)*100,
+                         lambda: tot.get("Ad Spend",0)/tot_ns*100 if tot_ns else np.nan,
+                         inverse=True)
+
+    rows_html += gap()
+
+    # CM2
+    rows_html += data_row("CM2", lambda m: cm2(m)/100000, lambda: T(cm2)/100000,
+                          cls="total-row", color_fn=True,
+                          fmt_fn=lambda x: Lbold(x) if not pd.isna(x) else "-")
+    rows_html += pct_row("CM2 (%)",
+                         lambda m: cm2(m)/nsv(m)*100,
+                         lambda: T(cm2)/tot_ns*100 if tot_ns else np.nan)
+
+    return f"""
+    <div style='overflow-x:auto'>
+    <table class='pnl-table'>
+      {th("Particulars (INR Lacs)")}
+      <tbody>{rows_html}</tbody>
+    </table>
+    </div>"""
 
 # ══════════════════════════════════════════════════════════════════════════════
 # SIDEBAR
@@ -250,14 +456,11 @@ with st.sidebar:
     <div style='text-align:center;padding:16px 0 8px 0'>
       <div style='font-size:26px'>🕌</div>
       <div style='font-size:17px;font-weight:800;color:{GOLD}'>Kenaz Perfumes</div>
-      <div style='font-size:11px;color:#666;letter-spacing:1px;text-transform:uppercase;margin-top:3px'>
-        One Guardian Brands
-      </div>
+      <div style='font-size:11px;color:#666;letter-spacing:1px;text-transform:uppercase;margin-top:3px'>One Guardian Brands</div>
     </div>""", unsafe_allow_html=True)
     st.markdown("---")
 
-    spreadsheet_name = ""  # fixed sheet via key
-    st.markdown(f"📋 **Sheet:** [Kenaz_PL_DB](https://docs.google.com/spreadsheets/d/10qFitbppdVbNK0w67q1HFK-l7N1uAzHJ0mkyB2XImJQ)")
+    st.markdown(f"📋 **Sheet:** [Kenaz_PL_DB](https://docs.google.com/spreadsheets/d/{SHEET_KEY})")
 
     st.markdown("### 📤 Upload P&L File")
     uploaded = st.file_uploader("Kenaz P&L (.xlsb)", type=["xlsb"])
@@ -268,20 +471,17 @@ with st.sidebar:
             ch_counts = raw["Channel"].value_counts()
             st.success(f"✅ {len(raw):,} rows | {raw['Month_name'].nunique()} months")
             st.info("  \n".join(f"• {ch}: {cnt}" for ch, cnt in ch_counts.items()))
-
             if st.button("💾 Save to Google Sheets", type="primary"):
                 with st.spinner("Saving…"):
                     client = get_gsheet_client()
-                    added, dupes = save_to_gsheet(client, raw, spreadsheet_name)
-                st.success(f"✅ {added:,} new rows added. {dupes:,} duplicates skipped.")
+                    added, dupes = save_to_gsheet(client, raw)
+                st.success(f"✅ {added:,} new rows. {dupes:,} dupes skipped.")
                 st.cache_data.clear()
-
         except Exception as e:
             st.error(f"Parse error: {e}")
 
     st.markdown("---")
-
-    df_raw = load_from_gsheet(spreadsheet_name)
+    df_raw = load_from_gsheet()
 
     if df_raw.empty:
         st.info("No data yet. Upload a file above.")
@@ -291,8 +491,7 @@ with st.sidebar:
 
     st.markdown("### 🔍 Filters")
     channels_avail = sorted(df_all["Channel"].unique())
-    months_df = (df_all[["Month_name","Month_sort"]]
-                 .drop_duplicates().sort_values("Month_sort"))
+    months_df = df_all[["Month_name","Month_sort"]].drop_duplicates().sort_values("Month_sort")
     months_avail = months_df["Month_name"].tolist()
 
     sel_channels = st.multiselect("Channels", channels_avail, default=channels_avail)
@@ -302,180 +501,95 @@ with st.sidebar:
     view = st.radio("View", ["P&L Summary","Channel Deep-Dive","Month Trend","Channel Mix"])
 
     st.markdown("---")
-    st.markdown("### 🔧 DB Tools")
-    if st.button("🗑️ Clear Sheet Cache"):
+    if st.button("🗑️ Clear Cache"):
         st.cache_data.clear()
         st.success("Cache cleared.")
-
 
 # ══════════════════════════════════════════════════════════════════════════════
 # MAIN
 # ══════════════════════════════════════════════════════════════════════════════
-st.markdown("<div class='header-bar'>📊 KENAZ PERFUMES — P&L DASHBOARD</div>",
-            unsafe_allow_html=True)
+st.markdown("<div class='header-bar'>📊 KENAZ PERFUMES — P&L DASHBOARD</div>", unsafe_allow_html=True)
 
 df = df_all[df_all["Channel"].isin(sel_channels) & df_all["Month_name"].isin(sel_months)]
-
 if df.empty:
-    st.warning("No data matches the selected filters.")
+    st.warning("No data for selected filters.")
     st.stop()
 
-# ─── KPI strip ────────────────────────────────────────────────────────────────
+# KPI strip
 tot = df[["Net Sales","COGS","GM","CM1","CM2","Ad Spend","Quantity"]].sum()
 nsv = tot["Net Sales"]
 
 def kpi(col, label, val, sub=""):
-    col.markdown(f"""
-    <div class='kpi-card'>
+    col.markdown(f"""<div class='kpi-card'>
       <div class='kpi-label'>{label}</div>
       <div class='kpi-value'>{val}</div>
-      <div class='kpi-sub'>{sub}</div>
-    </div>""", unsafe_allow_html=True)
+      <div class='kpi-sub'>{sub}</div></div>""", unsafe_allow_html=True)
 
 c1,c2,c3,c4,c5,c6 = st.columns(6)
-kpi(c1, "Net Sales",    fmt_lacs(nsv),            f"{int(tot['Quantity']):,} units")
-kpi(c2, "Gross Margin", fmt_lacs(tot["GM"]),       fmt_pct(tot["GM"]/nsv*100 if nsv else 0)+" of NSV")
-kpi(c3, "CM1",          fmt_lacs(tot["CM1"]),      fmt_pct(tot["CM1"]/nsv*100 if nsv else 0)+" of NSV")
-kpi(c4, "CM2",          fmt_lacs(tot["CM2"]),      fmt_pct(tot["CM2"]/nsv*100 if nsv else 0)+" of NSV")
-kpi(c5, "Ad Spend",     fmt_lacs(tot["Ad Spend"]), fmt_pct(tot["Ad Spend"]/nsv*100 if nsv else 0)+" of NSV")
-kpi(c6, "COGS",         fmt_lacs(tot["COGS"]),     fmt_pct(tot["COGS"]/nsv*100 if nsv else 0)+" of NSV")
+kpi(c1,"Net Sales",   f"&#8377;{nsv/100000:,.1f}L",  f"{int(tot['Quantity']):,} units")
+kpi(c2,"Gross Margin",f"&#8377;{tot['GM']/100000:,.1f}L", P(tot['GM']/nsv*100 if nsv else 0)+" of NSV")
+kpi(c3,"CM1",         f"&#8377;{tot['CM1']/100000:,.1f}L",P(tot['CM1']/nsv*100 if nsv else 0)+" of NSV")
+kpi(c4,"CM2",         f"&#8377;{tot['CM2']/100000:,.1f}L",P(tot['CM2']/nsv*100 if nsv else 0)+" of NSV")
+kpi(c5,"Ad Spend",    f"&#8377;{tot['Ad Spend']/100000:,.1f}L",P(tot['Ad Spend']/nsv*100 if nsv else 0)+" ACOS")
+kpi(c6,"COGS",        f"&#8377;{tot['COGS']/100000:,.1f}L",P(tot['COGS']/nsv*100 if nsv else 0)+" of NSV")
 
 st.markdown("<br>", unsafe_allow_html=True)
 
-month_order = (df[["Month_name","Month_sort"]]
-               .drop_duplicates().sort_values("Month_sort")["Month_name"].tolist())
+month_order = df[["Month_name","Month_sort"]].drop_duplicates().sort_values("Month_sort")["Month_name"].tolist()
 
-
-# ══════════════════════════════════════════════════════════════════════════════
-# VIEW: P&L Summary
 # ══════════════════════════════════════════════════════════════════════════════
 if view == "P&L Summary":
-    st.subheader("P&L Summary — Channel-wise")
+    # channel selector tabs
+    tab_options = ["Total"] + sel_channels
+    selected_tab = st.radio("View by", tab_options, horizontal=True, label_visibility="collapsed")
 
-    channels = sel_channels
-    agg = df.groupby("Channel")[["Net Sales","COGS","Freight Inward","Wages","GM",
-                                   "Commission","Payment Gateway","Shipping","Others",
-                                   "Bulk Logistic","Packaging","Warehousing",
-                                   "Ad Spend","CM1","CM2"]].sum()
-    total = agg.sum()
+    if selected_tab == "Total":
+        df_view = df
+    else:
+        df_view = df[df["Channel"] == selected_tab]
 
-    def row_html(label, key, is_total=False, inverse=False):
-        cls = "total-row" if is_total else ""
-        cells = ""
-        for ch in channels:
-            v      = agg.loc[ch, key] if ch in agg.index else 0
-            nsv_ch = agg.loc[ch, "Net Sales"] if ch in agg.index else 1
-            pct    = v / nsv_ch * 100 if nsv_ch else 0
-            pos    = (pct >= 0) != inverse
-            cc     = "positive" if pos else "negative"
-            cells += f"<td><span class='{cc}'>{fmt_lacs(v)}</span><br><span class='percent'>{fmt_pct(pct)}</span></td>"
-        tv = total[key]; tn = total["Net Sales"]
-        tp = tv / tn * 100 if tn else 0
-        tc = "positive" if (tp >= 0) != inverse else "negative"
-        cells += f"<td><span class='{tc}'>{fmt_lacs(tv)}</span><br><span class='percent'>{fmt_pct(tp)}</span></td>"
-        return f"<tr class='{cls}'><td>{label}</td>{cells}</tr>"
+    st.markdown(build_pnl_table(df_view, sel_months, sel_channels), unsafe_allow_html=True)
 
-    heads = "".join(f"<th>{ch}</th>" for ch in channels) + "<th>Total</th>"
-    st.markdown(f"""
-    <table class='pnl-table'>
-      <thead><tr><th>Metric (INR Lacs)</th>{heads}</tr></thead>
-      <tbody>
-        {row_html("Net Sales",            "Net Sales")}
-        {row_html("Less: COGS",           "COGS",            inverse=True)}
-        {row_html("Less: Freight Inward", "Freight Inward",  inverse=True)}
-        {row_html("Less: Wages",          "Wages",           inverse=True)}
-        {row_html("Gross Margin",         "GM",              is_total=True)}
-        {row_html("Less: Commission",     "Commission",      inverse=True)}
-        {row_html("Less: Payment GW",     "Payment Gateway", inverse=True)}
-        {row_html("Less: Shipping",       "Shipping",        inverse=True)}
-        {row_html("Less: Others",         "Others",          inverse=True)}
-        {row_html("Less: Bulk Logistic",  "Bulk Logistic",   inverse=True)}
-        {row_html("Less: Packaging",      "Packaging",       inverse=True)}
-        {row_html("Less: Warehousing",    "Warehousing",     inverse=True)}
-        {row_html("CM1",                  "CM1",             is_total=True)}
-        {row_html("Less: Ad Spend",       "Ad Spend",        inverse=True)}
-        {row_html("CM2",                  "CM2",             is_total=True)}
-      </tbody>
-    </table>""", unsafe_allow_html=True)
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# VIEW: Channel Deep-Dive
 # ══════════════════════════════════════════════════════════════════════════════
 elif view == "Channel Deep-Dive":
     st.subheader("Channel Deep-Dive")
-    ch_sel = st.selectbox("Select Channel", sel_channels)
+    ch_sel = st.selectbox("Channel", sel_channels)
     dch = df[df["Channel"] == ch_sel]
 
     pivot = (dch.groupby("Month_name")
-               .agg(Net_Sales=("Net Sales","sum"), COGS=("COGS","sum"),
-                    GM=("GM","sum"), CM1=("CM1","sum"), CM2=("CM2","sum"),
-                    Ad_Spend=("Ad Spend","sum"), Qty=("Quantity","sum"))
+               .agg(Net_Sales=("Net Sales","sum"), GM=("GM","sum"),
+                    CM1=("CM1","sum"), CM2=("CM2","sum"), Ad_Spend=("Ad Spend","sum"))
                .reindex([m for m in month_order if m in dch["Month_name"].values])
                .reset_index())
 
     fig = go.Figure()
-    fig.add_trace(go.Bar(name="CM2",      x=pivot["Month_name"], y=pivot["CM2"],      marker_color=GOLD))
-    fig.add_trace(go.Bar(name="Ad Spend", x=pivot["Month_name"], y=pivot["Ad_Spend"], marker_color="#e67e22"))
-    fig.add_trace(go.Scatter(name="Net Sales", x=pivot["Month_name"], y=pivot["Net_Sales"],
+    fig.add_trace(go.Bar(name="CM2",      x=pivot["Month_name"], y=pivot["CM2"]/100000,      marker_color=GOLD))
+    fig.add_trace(go.Bar(name="Ad Spend", x=pivot["Month_name"], y=pivot["Ad_Spend"]/100000, marker_color="#e67e22"))
+    fig.add_trace(go.Scatter(name="Net Sales", x=pivot["Month_name"], y=pivot["Net_Sales"]/100000,
                              mode="lines+markers", line=dict(color="#4fc3f7", width=2)))
-    fig.update_layout(barmode="stack", template="plotly_dark",
-                      plot_bgcolor=DARK, paper_bgcolor=DARK,
-                      font=dict(color="#aaa"), legend=dict(orientation="h"),
+    fig.update_layout(barmode="stack", template="plotly_dark", plot_bgcolor=DARK, paper_bgcolor=DARK,
+                      font=dict(color="#aaa"), yaxis_title="INR Lakhs", legend=dict(orientation="h"),
                       margin=dict(t=30,b=30,l=10,r=10), height=360,
                       xaxis=dict(gridcolor="#333"), yaxis=dict(gridcolor="#333"))
     st.plotly_chart(fig, use_container_width=True)
+    st.markdown(build_pnl_table(dch, sel_months, [ch_sel]), unsafe_allow_html=True)
 
-    pivot_idx = pivot.set_index("Month_name")
-    months_here = [m for m in month_order if m in pivot_idx.index]
-    metrics = [("Net_Sales","Net Sales"),("COGS","COGS"),("GM","Gross Margin"),
-               ("CM1","CM1"),("Ad_Spend","Ad Spend"),("CM2","CM2")]
-    heads = "".join(f"<th>{m}</th>" for m in months_here)
-    body  = ""
-    for key, label in metrics:
-        cls = "total-row" if key in ["GM","CM1","CM2"] else ""
-        cells = ""
-        for m in months_here:
-            v     = pivot_idx.loc[m, key] if m in pivot_idx.index else 0
-            nsv_m = pivot_idx.loc[m, "Net_Sales"] if m in pivot_idx.index else 1
-            pct   = v / nsv_m * 100 if nsv_m else 0
-            cells += f"<td>{fmt_lacs(v)}<br><span class='percent'>{fmt_pct(pct)}</span></td>"
-        body += f"<tr class='{cls}'><td>{label}</td>{cells}</tr>"
-
-    st.markdown(f"""
-    <table class='pnl-table'>
-      <thead><tr><th>Metric</th>{heads}</tr></thead>
-      <tbody>{body}</tbody>
-    </table>""", unsafe_allow_html=True)
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# VIEW: Month Trend
 # ══════════════════════════════════════════════════════════════════════════════
 elif view == "Month Trend":
-    st.subheader("Monthly Trend — All Channels")
+    st.subheader("Monthly Trend")
+    metric = st.selectbox("Metric", ["Net Sales","GM","CM1","CM2","Ad Spend","COGS"])
+    monthly = df.groupby(["Month_name","Month_sort"])[metric].sum().reset_index().sort_values("Month_sort")
 
-    monthly = (df.groupby(["Month_name","Month_sort"])
-                 [["Net Sales","GM","CM1","CM2","Ad Spend"]]
-                 .sum().reset_index().sort_values("Month_sort"))
-
-    metric = st.selectbox("Metric", ["Net Sales","GM","CM1","CM2","Ad Spend"])
-
-    fig = go.Figure(go.Bar(
-        x=monthly["Month_name"], y=monthly[metric]/100000,
-        marker_color=GOLD, name=metric
-    ))
+    fig = go.Figure(go.Bar(x=monthly["Month_name"], y=monthly[metric]/100000, marker_color=GOLD, name=metric))
     fig.update_layout(template="plotly_dark", plot_bgcolor=DARK, paper_bgcolor=DARK,
                       font=dict(color="#aaa"), yaxis_title="INR Lakhs",
                       margin=dict(t=30,b=30,l=10,r=10), height=380,
                       xaxis=dict(gridcolor="#333"), yaxis=dict(gridcolor="#333"))
     st.plotly_chart(fig, use_container_width=True)
 
-    st.markdown("**By Channel**")
-    ch_monthly = (df.groupby(["Channel","Month_name","Month_sort"])[metric]
-                    .sum().reset_index().sort_values("Month_sort"))
+    ch_monthly = df.groupby(["Channel","Month_name","Month_sort"])[metric].sum().reset_index().sort_values("Month_sort")
     fig2 = px.line(ch_monthly, x="Month_name", y=metric, color="Channel",
-                   color_discrete_sequence=[GOLD,"#e67e22","#4fc3f7","#81c784","#ce93d8","#ef9a9a"],
+                   color_discrete_sequence=[GOLD,"#e67e22","#4fc3f7","#81c784","#ce93d8"],
                    category_orders={"Month_name": month_order})
     fig2.update_layout(template="plotly_dark", plot_bgcolor=DARK, paper_bgcolor=DARK,
                        font=dict(color="#aaa"), margin=dict(t=20,b=30,l=10,r=10), height=350,
@@ -483,49 +597,33 @@ elif view == "Month Trend":
                        legend=dict(orientation="h"))
     st.plotly_chart(fig2, use_container_width=True)
 
-
-# ══════════════════════════════════════════════════════════════════════════════
-# VIEW: Channel Mix
 # ══════════════════════════════════════════════════════════════════════════════
 elif view == "Channel Mix":
     st.subheader("Channel Mix")
     ch_agg = df.groupby("Channel")[["Net Sales","CM1","CM2","Ad Spend","Quantity"]].sum().reset_index()
-    COLORS = [GOLD,"#e67e22","#4fc3f7","#81c784","#ce93d8","#ef9a9a"]
+    COLORS = [GOLD,"#e67e22","#4fc3f7","#81c784","#ce93d8"]
 
     col1, col2 = st.columns(2)
     with col1:
-        fig = px.pie(ch_agg, names="Channel", values="Net Sales", title="Revenue Split",
-                     color_discrete_sequence=COLORS)
-        fig.update_layout(template="plotly_dark", paper_bgcolor=DARK,
-                          font=dict(color="#aaa"), margin=dict(t=40,b=10), height=340)
+        fig = px.pie(ch_agg, names="Channel", values="Net Sales", title="Revenue Split", color_discrete_sequence=COLORS)
+        fig.update_layout(template="plotly_dark", paper_bgcolor=DARK, font=dict(color="#aaa"), margin=dict(t=40,b=10), height=340)
         st.plotly_chart(fig, use_container_width=True)
     with col2:
-        fig = px.pie(ch_agg, names="Channel", values="CM2", title="CM2 Split",
-                     color_discrete_sequence=COLORS)
-        fig.update_layout(template="plotly_dark", paper_bgcolor=DARK,
-                          font=dict(color="#aaa"), margin=dict(t=40,b=10), height=340)
+        fig = px.pie(ch_agg, names="Channel", values="CM2", title="CM2 Split", color_discrete_sequence=COLORS)
+        fig.update_layout(template="plotly_dark", paper_bgcolor=DARK, font=dict(color="#aaa"), margin=dict(t=40,b=10), height=340)
         st.plotly_chart(fig, use_container_width=True)
 
-    ch_agg["CM1%"] = ch_agg["CM1"] / ch_agg["Net Sales"] * 100
-    ch_agg["CM2%"] = ch_agg["CM2"] / ch_agg["Net Sales"] * 100
+    ch_agg["CM1%"] = ch_agg["CM1"]/ch_agg["Net Sales"]*100
+    ch_agg["CM2%"] = ch_agg["CM2"]/ch_agg["Net Sales"]*100
     ch_agg = ch_agg.sort_values("Net Sales", ascending=True)
-
     fig3 = go.Figure()
-    fig3.add_trace(go.Bar(name="CM1%", x=ch_agg["CM1%"], y=ch_agg["Channel"],
-                          orientation="h", marker_color=GOLD))
-    fig3.add_trace(go.Bar(name="CM2%", x=ch_agg["CM2%"], y=ch_agg["Channel"],
-                          orientation="h", marker_color="#e67e22"))
-    fig3.update_layout(barmode="group", template="plotly_dark",
-                       plot_bgcolor=DARK, paper_bgcolor=DARK,
+    fig3.add_trace(go.Bar(name="CM1%", x=ch_agg["CM1%"], y=ch_agg["Channel"], orientation="h", marker_color=GOLD))
+    fig3.add_trace(go.Bar(name="CM2%", x=ch_agg["CM2%"], y=ch_agg["Channel"], orientation="h", marker_color="#e67e22"))
+    fig3.update_layout(barmode="group", template="plotly_dark", plot_bgcolor=DARK, paper_bgcolor=DARK,
                        font=dict(color="#aaa"), xaxis_title="% of Net Sales",
-                       margin=dict(t=20,b=30,l=10,r=10), height=320,
-                       legend=dict(orientation="h"))
+                       margin=dict(t=20,b=30,l=10,r=10), height=320, legend=dict(orientation="h"))
     st.plotly_chart(fig3, use_container_width=True)
 
-
-# ─── Footer ───────────────────────────────────────────────────────────────────
-st.markdown(f"""
-<hr style='border-color:#333;margin-top:40px'>
-<div style='text-align:center;color:#555;font-size:11px'>
-  Kenaz Perfumes · One Guardian Brands · FY 25-26 P&amp;L Analytics
-</div>""", unsafe_allow_html=True)
+st.markdown(f"""<hr style='border-color:#333;margin-top:40px'>
+<div style='text-align:center;color:#555;font-size:11px'>Kenaz Perfumes · One Guardian Brands · FY 25-26 P&amp;L Analytics</div>""",
+unsafe_allow_html=True)
