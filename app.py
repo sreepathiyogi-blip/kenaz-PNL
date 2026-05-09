@@ -94,22 +94,16 @@ def get_gsheet_client():
     )
     return gspread.authorize(creds)
 
-def get_or_create_sheet(client, name):
-    try:
-        return client.open(name)
-    except gspread.SpreadsheetNotFound:
-        sh = client.create(name)
-        sh.share(
-            st.secrets["gcp_service_account"]["client_email"],
-            perm_type="user", role="writer"
-        )
-        return sh
+SHEET_KEY = "10qFitbppdVbNK0w67q1HFK-l7N1uAzHJ0mkyB2XImJQ"
+
+def get_sheet(client):
+    return client.open_by_key(SHEET_KEY)
 
 @st.cache_data(ttl=300)
-def load_from_gsheet(spreadsheet_name: str) -> pd.DataFrame:
+def load_from_gsheet(spreadsheet_name: str = "") -> pd.DataFrame:
     try:
         client = get_gsheet_client()
-        ws = get_or_create_sheet(client, spreadsheet_name).sheet1
+        ws = get_sheet(client).sheet1
         data = ws.get_all_records()
         if not data:
             return pd.DataFrame(columns=PNL_COLS)
@@ -124,8 +118,8 @@ def load_from_gsheet(spreadsheet_name: str) -> pd.DataFrame:
         st.error(f"Sheet load error: {e}")
         return pd.DataFrame(columns=PNL_COLS)
 
-def save_to_gsheet(client, new_df: pd.DataFrame, spreadsheet_name: str):
-    sh = get_or_create_sheet(client, spreadsheet_name)
+def save_to_gsheet(client, new_df: pd.DataFrame, spreadsheet_name: str = ""):
+    sh = get_sheet(client)
     ws = sh.sheet1
     existing = ws.get_all_records()
 
@@ -262,7 +256,8 @@ with st.sidebar:
     </div>""", unsafe_allow_html=True)
     st.markdown("---")
 
-    spreadsheet_name = st.text_input("Google Sheet Name", "Kenaz_PL_DB")
+    spreadsheet_name = ""  # fixed sheet via key
+    st.markdown(f"📋 **Sheet:** [Kenaz_PL_DB](https://docs.google.com/spreadsheets/d/10qFitbppdVbNK0w67q1HFK-l7N1uAzHJ0mkyB2XImJQ)")
 
     st.markdown("### 📤 Upload P&L File")
     uploaded = st.file_uploader("Kenaz P&L (.xlsb)", type=["xlsb"])
