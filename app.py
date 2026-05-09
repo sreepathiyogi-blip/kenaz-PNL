@@ -817,9 +817,13 @@ elif view == "Product P&L":
     ph = "".join(f"<th>{m}</th>" for m in prod_months) + "<th>Total</th>"
     pb = ""
 
-    pb += prow("MRP Sales",     lambda m: pv("MRP Sales",m)/100000)
-    pb += prow("Quantity",      lambda m: pv("Quantity",m)/100000,
-               fmt_fn=lambda x: f"{int(x):,}" if x else "-")
+    pb += prow("MRP Sales",  lambda m: pv("MRP Sales",m)/100000)
+    # Quantity row — raw count, custom HTML
+    qty_cells = "".join(
+        f"<td>{int(pv('Quantity',m)):,}</td>" for m in prod_months
+    )
+    qty_total = int(sum(pv("Quantity",m) for m in prod_months))
+    pb += f"<tr><td>Quantity</td>{qty_cells}<td>{qty_total:,}</td></tr>"
     pb += f"<tr class='section-gap'>{'<td></td>'*(len(prod_months)+2)}</tr>"
     pb += prow("Net Sales",     lambda m: pv("Net Sales",m)/100000, is_total=True)
 
