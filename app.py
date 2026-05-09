@@ -94,7 +94,9 @@ def Lbold(v):
 def P(v):
     """Format as percentage"""
     if pd.isna(v): return "-"
-    return f"{v:.1f}%"
+    rounded = round(v, 1)
+    if rounded == 0 and v != 0: return f"{v:.1f}%"
+    return f"{rounded:.1f}%"
 
 def INR(v):
     if pd.isna(v) or v == 0: return "-"
@@ -811,7 +813,7 @@ elif view == "Product P&L":
                 pval = vals_fn(m) / ns_m * 100 if not pd.isna(ns_m) else np.nan
                 pc   = color_val(pval, inverse)
                 pcells += f"<td style='color:{pc}'>{P(pval)}</td>"
-            tot_pval = tv / tot_ns_raw * 100 if not pd.isna(tot_ns_raw) else np.nan
+            tot_pval = tv / tot_ns_raw * 100 if (tot_ns_raw and not pd.isna(tot_ns_raw)) else np.nan
             tpc = color_val(tot_pval, inverse)
             row += f"<tr class='pct-row'><td></td>{pcells}<td style='color:{tpc}'>{P(tot_pval)}</td></tr>"
         return row
