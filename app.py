@@ -774,7 +774,10 @@ elif view == "Product P&L":
     prod_monthly = prod_monthly.set_index("Month_label")
     prod_months = [m for m in month_ord if m in prod_monthly.index]
 
-    def pv(col, m): return prod_monthly.loc[m, col] if m in prod_monthly.index else 0
+    def pv(col, m):
+        if m not in prod_monthly.index: return 0
+        val = prod_monthly.loc[m, col]
+        return float(val.iloc[0]) if hasattr(val, "iloc") else float(val)
     def mat_m(m):   return pv("Net Sales",m) - pv("COGS",m)
     def fw_m(m):    return pv("Freight Inward",m) + pv("Wages",m)
     def gm_m(m):    return mat_m(m) - fw_m(m)
@@ -783,78 +786,72 @@ elif view == "Product P&L":
     def cm1_m(m):   return gm_m(m) - cnl_m(m)
     def cm2_m(m):   return cm1_m(m) - pv("Ad Spend",m)
 
-    def prow(label, fn, pct_fn=None, is_total=False, inverse=False):
+    # ── helper: build a value row + optional pct row ──────────────────────────
+    def prow(label, vals_fn, pct_of=None, is_total=False, inverse=False):
+        """vals_fn(m) returns raw INR value. pct_of: column name for % denominator."""
         cls = "total-row" if is_total else ""
         cells = ""
+        tot_ns_raw = sum(pv("Net Sales", m) for m in prod_months) or np.nan
+
         for m in prod_months:
-            v = fn(m)
-            ns = pv("Net Sales",m) or np.nan
-            s = Lbold(v) if is_total else L(v)
-            c = color_val(v, inverse)
+            val = vals_fn(m)
+            s   = Lbold(val/100000) if is_total else L(val/100000)
+            c   = color_val(val, inverse)
             cells += f"<td style='color:{c}'>{s}</td>"
-            if pct_fn:
-                pass
-        tv = sum(fn(m) for m in prod_months)
-        ts = Lbold(tv) if is_total else L(tv)
+
+        tv = sum(vals_fn(m) for m in prod_months)
+        ts = Lbold(tv/100000) if is_total else L(tv/100000)
         tc = color_val(tv, inverse)
         row = f"<tr class='{cls}'><td>{label}</td>{cells}<td style='color:{tc}'>{ts}</td></tr>"
 
-        if pct_fn:
+        if pct_of is not None:
             pcells = ""
-            tot_ns_p = sum(pv("Net Sales",m) for m in prod_months) or np.nan
             for m in prod_months:
-                ns_m = pv("Net Sales",m) or np.nan
-                pv_ = pct_fn(m, ns_m)
-                pc = color_val(pv_, inverse)
-                pcells += f"<td style='color:{pc}'>{P(pv_)}</td>"
-            tot_pv = pct_fn(None, tot_ns_p) if pct_fn else np.nan
-            tpc = color_val(tot_pv, inverse)
-            row += f"<tr class='pct-row'><td></td>{pcells}<td style='color:{tpc}'>{P(tot_pv)}</td></tr>"
+                ns_m = pv("Net Sales", m) or np.nan
+                pval = vals_fn(m) / ns_m * 100 if not pd.isna(ns_m) else np.nan
+                pc   = color_val(pval, inverse)
+                pcells += f"<td style='color:{pc}'>{P(pval)}</td>"
+            tot_pval = tv / tot_ns_raw * 100 if not pd.isna(tot_ns_raw) else np.nan
+            tpc = color_val(tot_pval, inverse)
+            row += f"<tr class='pct-row'><td></td>{pcells}<td style='color:{tpc}'>{P(tot_pval)}</td></tr>"
         return row
-
-    def safe_pct(v, ns): return v/ns*100 if ns and not pd.isna(ns) else np.nan
 
     ph = "".join(f"<th>{m}</th>" for m in prod_months) + "<th>Total</th>"
     pb = ""
 
-    pb += prow("MRP Sales",  lambda m: pv("MRP Sales",m)/100000)
-    # Quantity row — raw count, custom HTML
-    qty_cells = "".join(
-        f"<td>{int(pv('Quantity',m)):,}</td>" for m in prod_months
-    )
-    qty_total = int(sum(pv("Quantity",m) for m in prod_months))
-    pb += f"<tr><td>Quantity</td>{qty_cells}<td>{qty_total:,}</td></tr>"
-    pb += f"<tr class='section-gap'>{'<td></td>'*(len(prod_months)+2)}</tr>"
-    pb += prow("Net Sales",     lambda m: pv("Net Sales",m)/100000, is_total=True)
+    # MRP Sales
+    pb += prow("MRP Sales", lambda m: pv("MRP Sales", m))
+    # Quantity — integer, no /100000
+    qty_cells = "".join(f"<td>{int(pv('Quantity',m)):,}</td>" for m in prod_months)
+    qty_tot   = int(sum(pv("Quantity", m) for m in prod_months))
+    pb += f"<tr><td>Quantity</td>{qty_cells}<td>{qty_tot:,}</td></tr>"
 
     pb += f"<tr class='section-gap'>{'<td></td>'*(len(prod_months)+2)}</tr>"
-    pb += prow("Less: COGS",    lambda m: pv("COGS",m)/100000, inverse=True,
-               pct_fn=lambda m,ns: safe_pct(pv("COGS",m if m else prod_months[-1])/1 if m else
-                                   sum(pv("COGS",mx) for mx in prod_months), ns))
-    pb += prow("Material Margins", lambda m: mat_m(m)/100000, is_total=True,
-               pct_fn=lambda m,ns: safe_pct(mat_m(m) if m else sum(mat_m(mx) for mx in prod_months), ns))
+    pb += prow("Net Sales", lambda m: pv("Net Sales", m), is_total=True)
+
     pb += f"<tr class='section-gap'>{'<td></td>'*(len(prod_months)+2)}</tr>"
-    pb += prow("Less: Freight+Wages", lambda m: fw_m(m)/100000, inverse=True,
-               pct_fn=lambda m,ns: safe_pct(fw_m(m) if m else sum(fw_m(mx) for mx in prod_months), ns))
-    pb += prow("Gross Margin",  lambda m: gm_m(m)/100000,  is_total=True,
-               pct_fn=lambda m,ns: safe_pct(gm_m(m) if m else sum(gm_m(mx) for mx in prod_months), ns))
+    pb += prow("Less: COGS",          lambda m: pv("COGS", m),           pct_of=True, inverse=True)
+    pb += prow("Material Margins",    lambda m: mat_m(m),                 pct_of=True, is_total=True)
+
     pb += f"<tr class='section-gap'>{'<td></td>'*(len(prod_months)+2)}</tr>"
-    pb += prow("Less: Commission",    lambda m: pv("Commission",m)/100000, inverse=True)
-    pb += prow("Less: Payment GW",    lambda m: pv("Payment Gateway",m)/100000, inverse=True)
-    pb += prow("Less: Shipping",      lambda m: pv("Shipping",m)/100000, inverse=True)
-    pb += prow("Less: Bulk Logistic", lambda m: pv("Bulk Logistic",m)/100000, inverse=True)
-    pb += prow("Less: Packaging",     lambda m: pv("Packaging",m)/100000, inverse=True)
-    pb += prow("Less: Warehousing",   lambda m: pv("Warehousing",m)/100000, inverse=True)
-    pb += prow("Less: Others",        lambda m: pv("Others",m)/100000, inverse=True)
-    pb += prow("C&L Total",    lambda m: cnl_m(m)/100000, inverse=True,
-               pct_fn=lambda m,ns: safe_pct(cnl_m(m) if m else sum(cnl_m(mx) for mx in prod_months), ns))
-    pb += prow("CM1",          lambda m: cm1_m(m)/100000, is_total=True,
-               pct_fn=lambda m,ns: safe_pct(cm1_m(m) if m else sum(cm1_m(mx) for mx in prod_months), ns))
+    pb += prow("Less: Freight Inwards", lambda m: pv("Freight Inward", m), inverse=True)
+    pb += prow("Less: Wages - Fixed",   lambda m: pv("Wages", m),          inverse=True)
+    pb += prow("Freight & Wages Total", lambda m: fw_m(m),                 pct_of=True, inverse=True)
+    pb += prow("Gross Margin",          lambda m: gm_m(m),                 pct_of=True, is_total=True)
+
     pb += f"<tr class='section-gap'>{'<td></td>'*(len(prod_months)+2)}</tr>"
-    pb += prow("Less: Ad Spend", lambda m: pv("Ad Spend",m)/100000, inverse=True,
-               pct_fn=lambda m,ns: safe_pct(pv("Ad Spend",m) if m else sum(pv("Ad Spend",mx) for mx in prod_months), ns))
-    pb += prow("CM2",            lambda m: cm2_m(m)/100000, is_total=True,
-               pct_fn=lambda m,ns: safe_pct(cm2_m(m) if m else sum(cm2_m(mx) for mx in prod_months), ns))
+    pb += prow("Less: Commission",      lambda m: pv("Commission", m),     inverse=True)
+    pb += prow("Less: Payment GW",      lambda m: pv("Payment Gateway", m),inverse=True)
+    pb += prow("Less: Shipping",        lambda m: pv("Shipping", m),       inverse=True)
+    pb += prow("Less: Bulk Logistic",   lambda m: pv("Bulk Logistic", m),  inverse=True)
+    pb += prow("Less: Packaging",       lambda m: pv("Packaging", m),      inverse=True)
+    pb += prow("Less: Warehousing",     lambda m: pv("Warehousing", m),    inverse=True)
+    pb += prow("Less: Others",          lambda m: pv("Others", m),         inverse=True)
+    pb += prow("C&L Total",             lambda m: cnl_m(m),                pct_of=True, inverse=True)
+    pb += prow("CM1",                 lambda m: cm1_m(m),          pct_of=True, is_total=True)
+    pb += f"<tr class='section-gap'>{'<td></td>'*(len(prod_months)+2)}</tr>"
+    pb += prow("Less: Ad Spend",      lambda m: pv("Ad Spend", m),  pct_of=True, inverse=True)
+    pb += prow("CM2",                 lambda m: cm2_m(m),           pct_of=True, is_total=True)
 
     st.markdown(f"""
     <div style='overflow-x:auto'>
