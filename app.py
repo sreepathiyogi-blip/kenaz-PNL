@@ -329,34 +329,24 @@ def enrich(df: pd.DataFrame) -> pd.DataFrame:
 def build_pnl_table(df, months, channels):
     """Build the full P&L table HTML exactly like the format requested."""
 
-    # aggregate by month × channel
-    grp = df.groupby(["Month_name","Month_sort"]).apply(
-        lambda g: pd.Series({
-            "MRP Sales":       g["MRP Sales"].sum(),
-            "Quantity":        g["Quantity"].sum(),
-            "Net Sales":       g["Net Sales"].sum(),
-            "COGS":            g["COGS"].sum(),
-            "Freight Inward":  g["Freight Inward"].sum(),
-            "Wages":           g["Wages"].sum(),
-            "Commission":      g["Commission"].sum(),
-            "Payment Gateway": g["Payment Gateway"].sum(),
-            "Shipping":        g["Shipping"].sum(),
-            "Bulk Logistic":   g["Bulk Logistic"].sum(),
-            "Packaging":       g["Packaging"].sum(),
-            "Warehousing":     g["Warehousing"].sum(),
-            "Rebate":          g["Rebate"].sum(),
-            "Others":          g["Others"].sum(),
-            "Ad Spend":        g["Ad Spend"].sum(),
-        })
-    ).reset_index().sort_values("Month_sort")
+    METRICS = ["MRP Sales","Quantity","Net Sales","COGS","Freight Inward","Wages",
+               "Commission","Payment Gateway","Shipping","Bulk Logistic","Packaging",
+               "Warehousing","Rebate","Others","Ad Spend"]
+
+    # aggregate by month — use simple groupby sum (pandas 3 safe)
+    grp = df.groupby(["Month_name","Month_sort"])[METRICS].sum().reset_index()
 
     # reindex to selected months in order
-    grp = grp[grp["Month_name"].isin(months)]
+    grp = grp[grp["Month_name"].isin(months)].copy()
     month_order = grp.sort_values("Month_sort")["Month_name"].tolist()
-    grp = grp.set_index("Month_name")
+
+    # build lookup dict: month -> {metric -> value}
+    lookup = {}
+    for _, row in grp.iterrows():
+        lookup[row["Month_name"]] = {m: float(row[m]) for m in METRICS}
 
     def v(metric, m):
-        return grp.loc[m, metric] if m in grp.index else 0
+        return lookup.get(m, {}).get(metric, 0)
 
     def nsv(m): return v("Net Sales", m) or np.nan
     def mrp(m): return v("MRP Sales", m) or np.nan
@@ -371,8 +361,8 @@ def build_pnl_table(df, months, channels):
     def cm1(m):        return gm(m) - cnl(m)
     def cm2(m):        return cm1(m) - v("Ad Spend",m)
 
-    # total column
-    tot = {k: grp[k].sum() for k in grp.columns if k != "Month_sort"}
+    # total column — sum across all months in lookup
+    tot = {metric: sum(lookup.get(m,{}).get(metric,0) for m in month_order) for metric in METRICS}
     def T(fn): return sum(fn(m) for m in month_order)
 
     months_cols = month_order  # display columns
