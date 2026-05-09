@@ -56,6 +56,16 @@ st.markdown(f"""
 SCOPES     = ["https://www.googleapis.com/auth/spreadsheets","https://www.googleapis.com/auth/drive"]
 SHEET_KEY  = "10qFitbppdVbNK0w67q1HFK-l7N1uAzHJ0mkyB2XImJQ"
 CHANNELS   = ["Website","Amazon","Meesho","Flipkart","Myntra PPMP"]
+EAN_MAP    = {
+    8906188065836: "Triumph",      8906188065799: "Gentleman",
+    8906188065928: "Oud Ameer",    8906188065775: "Untamed",
+    8906188065867: "Fortuna",      8906188065850: "La Beaute",
+    8906188065881: "Twilight",     8906188065980: "Bahiyaa Bayda",
+    8904512100307: "Female Gift Set", 8904512100291: "Male Gift Set",
+}
+SKU_NUM_COLS = ["Revenue Without Tax","Qty","COGS","TOTAL MRP","Inward","Wages",
+                "commission","Payment Gateway","Shipping","Bulk Logistic Cost",
+                "Packaging Cost","Warehousing Charges","Rebate","others","Total Spend"]
 PNL_COLS   = ["Month_serial","Month_name","Channel","MRP Sales","Quantity","Net Sales",
                "COGS","Freight Inward","Wages","Commission","Payment Gateway","Shipping",
                "Others","Ad Spend","Bulk Logistic","Packaging","Warehousing","Rebate"]
@@ -124,8 +134,19 @@ def save_to_gsheet(client, new_df: pd.DataFrame):
     existing = ws.get_all_records()
     new_df = new_df.copy()
     new_df["Month_serial"] = new_df["Month_serial"].astype(str)
+    NUM_COLS = ["MRP Sales","Quantity","Net Sales","COGS","Freight Inward","Wages",
+                "Commission","Payment Gateway","Shipping","Others","Ad Spend",
+                "Bulk Logistic","Packaging","Warehousing","Rebate"]
+
+    def df_to_rows(df):
+        out = df.copy()
+        for c in NUM_COLS:
+            if c in out.columns:
+                out[c] = pd.to_numeric(out[c], errors="coerce").fillna(0).round(4)
+        return [out.columns.tolist()] + out.astype(str).values.tolist()
+
     if not existing:
-        ws.update([new_df.columns.tolist()] + new_df.astype(str).values.tolist())
+        ws.update(df_to_rows(new_df))
         return len(new_df), 0
     ex = pd.DataFrame(existing)
     ex["Month_serial"] = ex["Month_serial"].astype(str)
@@ -138,7 +159,7 @@ def save_to_gsheet(client, new_df: pd.DataFrame):
                           truly_new.reindex(columns=all_cols, fill_value="")], ignore_index=True)
     combined = combined.sort_values(["Month_serial","Channel"])
     ws.clear()
-    ws.update([combined.columns.tolist()] + combined.astype(str).values.tolist())
+    ws.update(df_to_rows(combined))
     return len(truly_new), len(new_df) - len(truly_new)
 
 # ─── XLSB Parser ──────────────────────────────────────────────────────────────
@@ -204,6 +225,72 @@ def parse_xlsb(file_bytes: bytes) -> pd.DataFrame:
         "Warehousing":     grp["Sum of Warehousing Charges"],
         "Rebate":          grp["Sum of Rebate"],
     })
+
+# ─── SKU Parser ───────────────────────────────────────────────────────────────
+def parse_sku_data(file_bytes: bytes) -> pd.DataFrame:
+    """Parse Data sheet → product-level P&L."""
+    with tempfile.NamedTemporaryFile(suffix=".xlsb", delete=False) as tmp:
+        tmp.write(file_bytes); tmp_path = tmp.name
+    try:
+        rows = []
+        with open_workbook(tmp_path) as wb:
+            with wb.get_sheet("Data") as ws:
+                for row in ws.rows(): rows.append([c.v for c in row])
+    finally:
+        os.unlink(tmp_path)
+
+    headers = rows[1]
+    df = pd.DataFrame(rows[2:], columns=headers)
+
+    df["Month_label"] = df["Month"].apply(
+        lambda n: (date(1899,12,30)+timedelta(days=int(float(n)))).strftime("%b-%y")
+        if pd.notna(n) else None)
+    df["EAN"]   = pd.to_numeric(df["New SKU"], errors="coerce")
+    df["Model"] = df["EAN"].apply(lambda x: EAN_MAP.get(int(x),"Other") if pd.notna(x) else "Unknown")
+    df["Channel"] = df["Channel"].apply(lambda x: "Amazon" if x in ["FBA","RK"] else str(x))
+
+    for c in SKU_NUM_COLS:
+        if c in df.columns:
+            df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0)
+
+    df = df.dropna(subset=["Month_label"])
+
+    # split sales vs returns for RTO%
+    sales_df   = df[df["Sale / Return"] == "Sale"]
+    returns_df = df[df["Sale / Return"] == "Return"]
+
+    grp = sales_df.groupby(["Model","EAN","Month_label","Month","Channel"])[SKU_NUM_COLS].sum().reset_index()
+    ret_grp = returns_df.groupby(["Model","EAN","Month_label","Month","Channel"])[
+        ["Revenue Without Tax"]].sum().reset_index().rename(columns={"Revenue Without Tax":"Return Amount"})
+
+    grp = grp.merge(ret_grp, on=["Model","EAN","Month_label","Month","Channel"], how="left")
+    grp["Return Amount"] = grp["Return Amount"].fillna(0)
+
+    grp["Month_sort"] = grp["Month"].apply(
+        lambda s: str(int(float(s))).zfill(10) if pd.notna(s) else "9999999999")
+
+    # RTO% per model+month+channel already computed above
+    # ─── also read Data sheet for overall RTO% (used in main P&L) ───────────
+
+    # rename to match main P&L col names
+    grp = grp.rename(columns={
+        "Revenue Without Tax": "Net Sales",
+        "Qty":                 "Quantity",
+        "TOTAL MRP":           "MRP Sales",
+        "Inward":              "Freight Inward",
+        "Wages":               "Wages",
+        "commission":          "Commission",
+        "Payment Gateway":     "Payment Gateway",
+        "Shipping":            "Shipping",
+        "Bulk Logistic Cost":  "Bulk Logistic",
+        "Packaging Cost":      "Packaging",
+        "Warehousing Charges": "Warehousing",
+        "others":              "Others",
+        "Total Spend":         "Ad Spend",
+    })
+    # RTO% = Return Amount / Gross Sales (Net Sales here is gross sales only)
+    grp["RTO%"] = (grp["Return Amount"] / grp["Net Sales"].replace(0, np.nan) * 100).fillna(0)
+    return grp
 
 # ─── Enrich ───────────────────────────────────────────────────────────────────
 def enrich(df: pd.DataFrame) -> pd.DataFrame:
@@ -467,7 +554,10 @@ with st.sidebar:
 
     if uploaded:
         try:
-            raw = parse_xlsb(uploaded.read())
+            file_bytes = uploaded.read()
+            st.session_state["last_upload_bytes"] = file_bytes
+
+            raw = parse_xlsb(file_bytes)
             ch_counts = raw["Channel"].value_counts()
             st.success(f"✅ {len(raw):,} rows | {raw['Month_name'].nunique()} months")
             st.info("  \n".join(f"• {ch}: {cnt}" for ch, cnt in ch_counts.items()))
@@ -498,12 +588,22 @@ with st.sidebar:
     sel_months   = st.multiselect("Months",   months_avail,   default=months_avail)
 
     st.markdown("---")
-    view = st.radio("View", ["P&L Summary","Channel Deep-Dive","Month Trend","Channel Mix"])
+    view = st.radio("View", ["P&L Summary","Product P&L","Channel Deep-Dive","Month Trend","Channel Mix"])
 
     st.markdown("---")
     if st.button("🗑️ Clear Cache"):
         st.cache_data.clear()
         st.success("Cache cleared.")
+    if st.button("🔥 Clear Sheet & Re-upload", type="secondary"):
+        with st.spinner("Clearing sheet..."):
+            try:
+                client = get_gsheet_client()
+                ws = get_sheet(client).sheet1
+                ws.clear()
+                st.cache_data.clear()
+                st.success("Sheet cleared. Now re-upload your file.")
+            except Exception as e:
+                st.error(f"Error: {e}")
 
 # ══════════════════════════════════════════════════════════════════════════════
 # MAIN
@@ -549,6 +649,225 @@ if view == "P&L Summary":
         df_view = df[df["Channel"] == selected_tab]
 
     st.markdown(build_pnl_table(df_view, sel_months, sel_channels), unsafe_allow_html=True)
+
+# ══════════════════════════════════════════════════════════════════════════════
+elif view == "Product P&L":
+    st.subheader("Product-wise P&L")
+
+    if "last_upload_bytes" not in st.session_state:
+        st.info("Upload and save a file first to see product-level P&L.")
+        st.stop()
+
+    with st.spinner("Parsing product data..."):
+        sku_df = parse_sku_data(st.session_state["last_upload_bytes"])
+
+    # filters
+    all_models = sorted(sku_df["Model"].unique())
+    all_months_sku = (sku_df[["Month_label","Month_sort"]]
+                      .drop_duplicates().sort_values("Month_sort")["Month_label"].tolist())
+    target_months = {'Oct-25','Nov-25','Dec-25','Jan-26','Feb-26','Mar-26','Apr-26'}
+    avail_months = [m for m in all_months_sku if m in target_months]
+
+    col_f1, col_f2, col_f3 = st.columns([2,2,2])
+    with col_f1:
+        sel_models = st.multiselect("Products", all_models, default=all_models, key="sku_models")
+    with col_f2:
+        sel_sku_months = st.multiselect("Months", avail_months, default=avail_months, key="sku_months")
+    with col_f3:
+        sel_sku_ch = st.multiselect("Channels", CHANNELS, default=CHANNELS, key="sku_ch")
+
+    sku_f = sku_df[
+        sku_df["Model"].isin(sel_models) &
+        sku_df["Month_label"].isin(sel_sku_months) &
+        sku_df["Channel"].isin(sel_sku_ch)
+    ]
+
+    if sku_f.empty:
+        st.warning("No data for selected filters.")
+        st.stop()
+
+    # ── Month-wise product summary table ─────────────────────────────────────
+    month_ord = (sku_f[["Month_label","Month_sort"]].drop_duplicates()
+                 .sort_values("Month_sort")["Month_label"].tolist())
+
+    grp = sku_f.groupby(["Model","Month_label","Month_sort"])[
+        ["Net Sales","Quantity","MRP Sales","COGS","Freight Inward","Wages",
+         "Commission","Payment Gateway","Shipping","Bulk Logistic",
+         "Packaging","Warehousing","Others","Ad Spend"]
+    ].sum().reset_index()
+
+    def sku_metrics(g):
+        ns = g["Net Sales"].sum()
+        cogs = g["COGS"].sum()
+        fw = (g["Freight Inward"] + g["Wages"]).sum()
+        gm = ns - cogs - fw
+        cnl = (g["Commission"]+g["Payment Gateway"]+g["Shipping"]+
+               g["Bulk Logistic"]+g["Packaging"]+g["Warehousing"]+g["Others"]).sum()
+        cm1 = gm - cnl
+        ads = g["Ad Spend"].sum()
+        cm2 = cm1 - ads
+        qty = g["Quantity"].sum()
+        mrp = g["MRP Sales"].sum()
+        return pd.Series({
+            "Net Sales": ns, "COGS": cogs, "GM": gm, "CnL": cnl,
+            "CM1": cm1, "Ad Spend": ads, "CM2": cm2,
+            "Qty": qty, "MRP Sales": mrp,
+        })
+
+    summary = grp.groupby(["Model","Month_label","Month_sort"]).apply(sku_metrics).reset_index()
+    summary["GM%"]  = summary["GM"]  / summary["Net Sales"].replace(0,np.nan) * 100
+    summary["CM1%"] = summary["CM1"] / summary["Net Sales"].replace(0,np.nan) * 100
+    summary["CM2%"] = summary["CM2"] / summary["Net Sales"].replace(0,np.nan) * 100
+
+    # Pivot: model × month for Net Sales
+    st.markdown("#### Net Sales by Product (INR Lacs)")
+    ns_pivot = summary.pivot_table(index="Model", columns="Month_label",
+                                    values="Net Sales", aggfunc="sum").reindex(columns=month_ord)
+    ns_pivot["Total"] = ns_pivot.sum(axis=1)
+    ns_pivot = ns_pivot.sort_values("Total", ascending=False)
+
+    def style_lacs(v):
+        try:
+            f = float(v)
+            return f"{f/100000:,.2f}" if f != 0 else "-"
+        except: return str(v)
+
+    heads = "".join(f"<th>{m}</th>" for m in month_ord) + "<th>Total</th>"
+    body = ""
+    for model in ns_pivot.index:
+        cells = ""
+        for m in month_ord:
+            v = ns_pivot.loc[model, m] if m in ns_pivot.columns else 0
+            cells += f"<td>{style_lacs(v)}</td>"
+        tot_v = ns_pivot.loc[model, "Total"]
+        body += f"<tr><td><b>{model}</b></td>{cells}<td><b>{style_lacs(tot_v)}</b></td></tr>"
+    # totals row
+    tot_cells = ""
+    for m in month_ord:
+        tot_cells += f"<td><b>{style_lacs(ns_pivot[m].sum())}</b></td>"
+    tot_cells += f"<td><b>{style_lacs(ns_pivot['Total'].sum())}</b></td>"
+    body += f"<tr class='total-row'><td>Total</td>{tot_cells}</tr>"
+
+    st.markdown(f"""
+    <div style='overflow-x:auto'>
+    <table class='pnl-table'>
+      <thead><tr><th>Product</th>{heads}</tr></thead>
+      <tbody>{body}</tbody>
+    </table></div>""", unsafe_allow_html=True)
+
+    # ── Full P&L per product (select one) ────────────────────────────────────
+    st.markdown("<br>", unsafe_allow_html=True)
+    st.markdown("#### Product Deep-Dive P&L")
+    sel_prod = st.selectbox("Select Product", sorted(sku_f["Model"].unique()), key="sku_prod")
+    prod_df = sku_f[sku_f["Model"] == sel_prod]
+
+    prod_monthly = prod_df.groupby(["Month_label","Month_sort"])[
+        ["Net Sales","Quantity","MRP Sales","COGS","Freight Inward","Wages",
+         "Commission","Payment Gateway","Shipping","Bulk Logistic",
+         "Packaging","Warehousing","Others","Ad Spend"]
+    ].sum().reset_index().sort_values("Month_sort")
+    prod_monthly = prod_monthly.set_index("Month_label")
+    prod_months = [m for m in month_ord if m in prod_monthly.index]
+
+    def pv(col, m): return prod_monthly.loc[m, col] if m in prod_monthly.index else 0
+    def mat_m(m):   return pv("Net Sales",m) - pv("COGS",m)
+    def fw_m(m):    return pv("Freight Inward",m) + pv("Wages",m)
+    def gm_m(m):    return mat_m(m) - fw_m(m)
+    def cnl_m(m):   return (pv("Commission",m)+pv("Payment Gateway",m)+pv("Shipping",m)+
+                            pv("Bulk Logistic",m)+pv("Packaging",m)+pv("Warehousing",m)+pv("Others",m))
+    def cm1_m(m):   return gm_m(m) - cnl_m(m)
+    def cm2_m(m):   return cm1_m(m) - pv("Ad Spend",m)
+
+    def prow(label, fn, pct_fn=None, is_total=False, inverse=False):
+        cls = "total-row" if is_total else ""
+        cells = ""
+        for m in prod_months:
+            v = fn(m)
+            ns = pv("Net Sales",m) or np.nan
+            s = Lbold(v) if is_total else L(v)
+            c = color_val(v, inverse)
+            cells += f"<td style='color:{c}'>{s}</td>"
+            if pct_fn:
+                pass
+        tv = sum(fn(m) for m in prod_months)
+        ts = Lbold(tv) if is_total else L(tv)
+        tc = color_val(tv, inverse)
+        row = f"<tr class='{cls}'><td>{label}</td>{cells}<td style='color:{tc}'>{ts}</td></tr>"
+
+        if pct_fn:
+            pcells = ""
+            tot_ns_p = sum(pv("Net Sales",m) for m in prod_months) or np.nan
+            for m in prod_months:
+                ns_m = pv("Net Sales",m) or np.nan
+                pv_ = pct_fn(m, ns_m)
+                pc = color_val(pv_, inverse)
+                pcells += f"<td style='color:{pc}'>{P(pv_)}</td>"
+            tot_pv = pct_fn(None, tot_ns_p) if pct_fn else np.nan
+            tpc = color_val(tot_pv, inverse)
+            row += f"<tr class='pct-row'><td></td>{pcells}<td style='color:{tpc}'>{P(tot_pv)}</td></tr>"
+        return row
+
+    def safe_pct(v, ns): return v/ns*100 if ns and not pd.isna(ns) else np.nan
+
+    ph = "".join(f"<th>{m}</th>" for m in prod_months) + "<th>Total</th>"
+    pb = ""
+
+    pb += prow("MRP Sales",     lambda m: pv("MRP Sales",m)/100000)
+    pb += prow("Quantity",      lambda m: pv("Quantity",m),
+               fmt_fn=lambda x: f"{int(x):,}" if x else "-")
+    pb += f"<tr class='section-gap'>{'<td></td>'*(len(prod_months)+2)}</tr>"
+    pb += prow("Net Sales",     lambda m: pv("Net Sales",m)/100000, is_total=True)
+
+    pb += f"<tr class='section-gap'>{'<td></td>'*(len(prod_months)+2)}</tr>"
+    pb += prow("Less: COGS",    lambda m: pv("COGS",m)/100000, inverse=True,
+               pct_fn=lambda m,ns: safe_pct(pv("COGS",m if m else prod_months[-1])/1 if m else
+                                   sum(pv("COGS",mx) for mx in prod_months), ns))
+    pb += prow("Material Margins", lambda m: mat_m(m)/100000, is_total=True,
+               pct_fn=lambda m,ns: safe_pct(mat_m(m) if m else sum(mat_m(mx) for mx in prod_months), ns))
+    pb += f"<tr class='section-gap'>{'<td></td>'*(len(prod_months)+2)}</tr>"
+    pb += prow("Less: Freight+Wages", lambda m: fw_m(m)/100000, inverse=True,
+               pct_fn=lambda m,ns: safe_pct(fw_m(m) if m else sum(fw_m(mx) for mx in prod_months), ns))
+    pb += prow("Gross Margin",  lambda m: gm_m(m)/100000,  is_total=True,
+               pct_fn=lambda m,ns: safe_pct(gm_m(m) if m else sum(gm_m(mx) for mx in prod_months), ns))
+    pb += f"<tr class='section-gap'>{'<td></td>'*(len(prod_months)+2)}</tr>"
+    pb += prow("Less: Commission",    lambda m: pv("Commission",m)/100000, inverse=True)
+    pb += prow("Less: Payment GW",    lambda m: pv("Payment Gateway",m)/100000, inverse=True)
+    pb += prow("Less: Shipping",      lambda m: pv("Shipping",m)/100000, inverse=True)
+    pb += prow("Less: Bulk Logistic", lambda m: pv("Bulk Logistic",m)/100000, inverse=True)
+    pb += prow("Less: Packaging",     lambda m: pv("Packaging",m)/100000, inverse=True)
+    pb += prow("Less: Warehousing",   lambda m: pv("Warehousing",m)/100000, inverse=True)
+    pb += prow("Less: Others",        lambda m: pv("Others",m)/100000, inverse=True)
+    pb += prow("C&L Total",    lambda m: cnl_m(m)/100000, inverse=True,
+               pct_fn=lambda m,ns: safe_pct(cnl_m(m) if m else sum(cnl_m(mx) for mx in prod_months), ns))
+    pb += prow("CM1",          lambda m: cm1_m(m)/100000, is_total=True,
+               pct_fn=lambda m,ns: safe_pct(cm1_m(m) if m else sum(cm1_m(mx) for mx in prod_months), ns))
+    pb += f"<tr class='section-gap'>{'<td></td>'*(len(prod_months)+2)}</tr>"
+    pb += prow("Less: Ad Spend", lambda m: pv("Ad Spend",m)/100000, inverse=True,
+               pct_fn=lambda m,ns: safe_pct(pv("Ad Spend",m) if m else sum(pv("Ad Spend",mx) for mx in prod_months), ns))
+    pb += prow("CM2",            lambda m: cm2_m(m)/100000, is_total=True,
+               pct_fn=lambda m,ns: safe_pct(cm2_m(m) if m else sum(cm2_m(mx) for mx in prod_months), ns))
+
+    st.markdown(f"""
+    <div style='overflow-x:auto'>
+    <table class='pnl-table'>
+      <thead><tr><th>{sel_prod} (INR Lacs)</th>{ph}</tr></thead>
+      <tbody>{pb}</tbody>
+    </table></div>""", unsafe_allow_html=True)
+
+    # ── Bar chart: CM2 trend by product ──────────────────────────────────────
+    st.markdown("<br>", unsafe_allow_html=True)
+    st.markdown("#### CM2 Trend by Product")
+    cm2_data = summary[summary["Month_label"].isin(prod_months)].copy()
+    fig = px.bar(cm2_data.sort_values("Month_sort"), x="Month_label", y="CM2",
+                 color="Model", barmode="group",
+                 color_discrete_sequence=[GOLD,"#e67e22","#4fc3f7","#81c784","#ce93d8",
+                                          "#ef9a9a","#fff176","#b0bec5","#80cbc4","#ffcc80"])
+    fig.update_layout(template="plotly_dark", plot_bgcolor=DARK, paper_bgcolor=DARK,
+                      font=dict(color="#aaa"), yaxis_title="INR", legend=dict(orientation="h"),
+                      margin=dict(t=20,b=30,l=10,r=10), height=380,
+                      xaxis=dict(gridcolor="#333",categoryorder="array",categoryarray=month_ord),
+                      yaxis=dict(gridcolor="#333"))
+    st.plotly_chart(fig, use_container_width=True)
 
 # ══════════════════════════════════════════════════════════════════════════════
 elif view == "Channel Deep-Dive":
