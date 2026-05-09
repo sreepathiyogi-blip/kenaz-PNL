@@ -442,7 +442,7 @@ def build_pnl_table(df, months, channels):
                           color_fn=True, inverse=True)
     rows_html += pct_row("COGS %",
                          lambda m: v("COGS",m)/nsv(m)*100,
-                         lambda: tot.get("COGS",0)/100000/tot_ns*100 if tot_ns else np.nan,
+                         lambda: tot.get("COGS",0)/tot_ns*100 if tot_ns else np.nan,
                          inverse=True)
 
     rows_html += gap()
@@ -451,8 +451,8 @@ def build_pnl_table(df, months, channels):
     rows_html += data_row("Material Margins", lambda m: mat_margin(m)/100000,
                           lambda: T(mat_margin)/100000, cls="total-row", color_fn=True)
     rows_html += pct_row("Material Margins (%)",
-                         lambda m: mat_margin(m)/100000/nsv(m)*100,
-                         lambda: T(mat_margin)/100000/tot_ns*100 if tot_ns else np.nan)
+                         lambda m: mat_margin(m)/nsv(m)*100,
+                         lambda: T(mat_margin)/tot_ns*100 if tot_ns else np.nan)
 
     rows_html += gap()
 
@@ -464,8 +464,8 @@ def build_pnl_table(df, months, channels):
     rows_html += data_row("Freight Inwards & Wages Total", lambda m: fw(m)/100000,
                           lambda: T(fw)/100000, color_fn=True, inverse=True)
     rows_html += pct_row("Inward %age",
-                         lambda m: fw(m)/100000/nsv(m)*100,
-                         lambda: T(fw)/100000/tot_ns*100 if tot_ns else np.nan,
+                         lambda m: fw(m)/nsv(m)*100,
+                         lambda: T(fw)/tot_ns*100 if tot_ns else np.nan,
                          inverse=True)
 
     rows_html += gap()
@@ -474,8 +474,8 @@ def build_pnl_table(df, months, channels):
     rows_html += data_row("Gross Margins", lambda m: gm(m)/100000,
                           lambda: T(gm)/100000, cls="total-row", color_fn=True)
     rows_html += pct_row("Gross Margins (%)",
-                         lambda m: gm(m)/100000/nsv(m)*100,
-                         lambda: T(gm)/100000/tot_ns*100 if tot_ns else np.nan)
+                         lambda m: gm(m)/nsv(m)*100,
+                         lambda: T(gm)/tot_ns*100 if tot_ns else np.nan)
 
     rows_html += gap()
 
@@ -490,8 +490,8 @@ def build_pnl_table(df, months, channels):
     rows_html += data_row("Less: Others",                    lambda m: v("Others",m)/100000,         lambda: tot.get("Others",0)/100000,         color_fn=True, inverse=True)
     rows_html += data_row("Commission & Logistics Total",    lambda m: cnl(m)/100000,                lambda: T(cnl)/100000,                      color_fn=True, inverse=True)
     rows_html += pct_row("Commission & Logistics %",
-                         lambda m: cnl(m)/100000/nsv(m)*100,
-                         lambda: T(cnl)/100000/tot_ns*100 if tot_ns else np.nan,
+                         lambda m: cnl(m)/nsv(m)*100,
+                         lambda: T(cnl)/tot_ns*100 if tot_ns else np.nan,
                          inverse=True)
 
     rows_html += gap()
@@ -501,8 +501,8 @@ def build_pnl_table(df, months, channels):
                           cls="total-row", color_fn=True,
                           fmt_fn=lambda x: Lbold(x) if not pd.isna(x) else "-")
     rows_html += pct_row("CM1 (%)",
-                         lambda m: cm1(m)/100000/nsv(m)*100,
-                         lambda: T(cm1)/100000/tot_ns*100 if tot_ns else np.nan)
+                         lambda m: cm1(m)/nsv(m)*100,
+                         lambda: T(cm1)/tot_ns*100 if tot_ns else np.nan)
 
     rows_html += gap()
 
@@ -511,7 +511,7 @@ def build_pnl_table(df, months, channels):
                           lambda: tot.get("Ad Spend",0)/100000, color_fn=True, inverse=True)
     rows_html += pct_row("ACOS (%)",
                          lambda m: v("Ad Spend",m)/nsv(m)*100,
-                         lambda: tot.get("Ad Spend",0)/100000/tot_ns*100 if tot_ns else np.nan,
+                         lambda: tot.get("Ad Spend",0)/tot_ns*100 if tot_ns else np.nan,
                          inverse=True)
 
     rows_html += gap()
@@ -521,8 +521,8 @@ def build_pnl_table(df, months, channels):
                           cls="total-row", color_fn=True,
                           fmt_fn=lambda x: Lbold(x) if not pd.isna(x) else "-")
     rows_html += pct_row("CM2 (%)",
-                         lambda m: cm2(m)/100000/nsv(m)*100,
-                         lambda: T(cm2)/100000/tot_ns*100 if tot_ns else np.nan)
+                         lambda m: cm2(m)/nsv(m)*100,
+                         lambda: T(cm2)/tot_ns*100 if tot_ns else np.nan)
 
     return f"""
     <div style='overflow-x:auto'>
