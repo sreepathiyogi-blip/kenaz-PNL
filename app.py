@@ -548,6 +548,8 @@ with st.sidebar:
             st.session_state["last_upload_bytes"] = file_bytes
 
             raw = parse_xlsb(file_bytes)
+            # store enriched df in session state for instant dashboard use
+            st.session_state["parsed_df"] = enrich(raw)
             ch_counts = raw["Channel"].value_counts()
             st.success(f"✅ {len(raw):,} rows | {raw['Month_name'].nunique()} months")
             st.info("  \n".join(f"• {ch}: {cnt}" for ch, cnt in ch_counts.items()))
@@ -561,21 +563,17 @@ with st.sidebar:
             st.error(f"Parse error: {e}")
 
     st.markdown("---")
-    df_raw = load_from_gsheet()
 
-    if df_raw.empty:
-        st.info("No data yet. Upload a file above.")
-        st.stop()
-
-    df_all = enrich(df_raw)
-
-    with st.expander("🔍 Debug: Raw sheet data", expanded=False):
-        st.write(f"Rows in sheet: {len(df_raw)}")
-        st.write(f"Columns: {list(df_raw.columns)}")
-        if not df_raw.empty:
-            st.write("Net Sales sample:", df_raw["Net Sales"].head(5).tolist() if "Net Sales" in df_raw.columns else "col missing")
-            st.write("Net Sales dtype:", str(df_raw["Net Sales"].dtype) if "Net Sales" in df_raw.columns else "col missing")
-            st.dataframe(df_raw.head(10))
+    # prefer in-memory parsed data (from upload) over Google Sheets
+    # this avoids any sheet serialization issues
+    if "parsed_df" in st.session_state:
+        df_all = st.session_state["parsed_df"]
+    else:
+        df_raw = load_from_gsheet()
+        if df_raw.empty:
+            st.info("No data yet. Upload a file above.")
+            st.stop()
+        df_all = enrich(df_raw)
 
     st.markdown("### 🔍 Filters")
     channels_avail = sorted(df_all["Channel"].unique())
