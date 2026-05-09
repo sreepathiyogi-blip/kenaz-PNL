@@ -76,7 +76,12 @@ def xlsb_to_date(n):
     except: return None
 
 def L(v):
-    """Format as Lakhs with 2 decimals"""
+    """Format as-is with 2 decimals"""
+    if pd.isna(v) or v == 0: return "-"
+    return f"{v:,.2f}"
+
+def Llacs(v):
+    """Format in lakhs with 2 decimals"""
     if pd.isna(v) or v == 0: return "-"
     return f"{v:,.2f}"
 
@@ -425,7 +430,7 @@ def build_pnl_table(df, months, channels):
     rows_html += gap()
 
     # Net Sales
-    rows_html += data_row("Net Sales", lambda m: v("Net Sales",m), lambda: tot_ns,
+    rows_html += data_row("Net Sales", lambda m: v("Net Sales",m)/100000, lambda: tot_ns/100000,
                           cls="total-row")
 
     rows_html += gap()
