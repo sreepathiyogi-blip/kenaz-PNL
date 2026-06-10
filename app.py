@@ -40,8 +40,10 @@ st.markdown(f"""
   .pnl-table tr.total-row td {{ background:{GOLD}18;font-weight:700;color:{CREAM};border-top:2px solid {GOLD}55;border-bottom:2px solid {GOLD}33; }}
   .pnl-table tr.pct-row td {{ color:#888;font-size:11.5px;border-bottom:1px solid #222; }}
   .pnl-table tr.pct-row td:first-child {{ color:#666; }}
+  .pnl-table tr.growth-row td {{ color:#5ba3c9;font-size:11.5px;border-bottom:1px solid #222;font-style:italic; }}
+  .pnl-table tr.growth-row td:first-child {{ color:#4a8aaa; }}
   .pnl-table tr.section-gap td {{ height:6px;background:{DARK};border:none; }}
-  .pnl-table tr:not(.pct-row):not(.total-row):not(.section-gap):hover td {{ background:#252525; }}
+  .pnl-table tr:not(.pct-row):not(.total-row):not(.section-gap):not(.growth-row):hover td {{ background:#252525; }}
   .positive {{ color:#4caf50!important; }}
   .negative {{ color:#e57373!important; }}
   .header-bar {{ background:{GOLD};padding:12px 20px;border-radius:8px;color:#1A1A1A;
@@ -53,28 +55,46 @@ st.markdown(f"""
 """, unsafe_allow_html=True)
 
 # ─── Constants ────────────────────────────────────────────────────────────────
-SCOPES     = ["https://www.googleapis.com/auth/spreadsheets","https://www.googleapis.com/auth/drive"]
-SHEET_KEY  = "10qFitbppdVbNK0w67q1HFK-l7N1uAzHJ0mkyB2XImJQ"
-CHANNELS   = ["Website","Amazon","Meesho","Flipkart","Myntra PPMP"]
-EAN_MAP    = {
-    8906188065836: "Triumph",      8906188065799: "Gentleman",
-    8906188065928: "Oud Ameer",    8906188065775: "Untamed",
-    8906188065867: "Fortuna",      8906188065850: "La Beaute",
-    8906188065881: "Twilight",     8906188065980: "Bahiyaa Bayda",
-    8904512100307: "Female Gift Set", 8904512100291: "Male Gift Set",
+SCOPES    = ["https://www.googleapis.com/auth/spreadsheets","https://www.googleapis.com/auth/drive"]
+SHEET_KEY = "10qFitbppdVbNK0w67q1HFK-l7N1uAzHJ0mkyB2XImJQ"
+
+# All channels after normalisation
+CHANNELS  = ["Website", "Amazon", "Meesho", "Flipkart", "Myntra", "Swiggy", "Zepto"]
+
+# Raw → normalised channel map (applied everywhere data is parsed)
+CHANNEL_NORMALISE = {
+    "FBA":          "Amazon",
+    "RK":           "Amazon",
+    "Myntra PPMP":  "Myntra",
+    "Myntra SJIT":  "Myntra",
 }
+
+EAN_MAP = {
+    8906188065836: "Triumph",        8906188065799: "Gentleman",
+    8906188065928: "Oud Ameer",      8906188065775: "Untamed",
+    8906188065867: "Fortuna",        8906188065850: "La Beaute",
+    8906188065881: "Twilight",       8906188065980: "Bahiyaa Bayda",
+    8904512100307: "Female Gift Set",8904512100291: "Male Gift Set",
+}
+
 SKU_NUM_COLS = ["Revenue Without Tax","Qty","COGS","TOTAL MRP","Inward","Wages",
                 "commission","Payment Gateway","Shipping","Bulk Logistic Cost",
                 "Packaging Cost","Warehousing Charges","Rebate","others","Total Spend"]
-PNL_COLS   = ["Month_serial","Month_name","Channel","MRP Sales","Quantity","Net Sales",
-               "COGS","Freight Inward","Wages","Commission","Payment Gateway","Shipping",
-               "Others","Ad Spend","Bulk Logistic","Packaging","Warehousing","Rebate"]
+
+PNL_COLS = ["Month_serial","Month_name","Channel","MRP Sales","Quantity","Net Sales",
+            "COGS","Freight Inward","Wages","Commission","Payment Gateway","Shipping",
+            "Others","Ad Spend","Bulk Logistic","Packaging","Warehousing","Rebate"]
+
 SKU_SAVE_COLS = ["Model","EAN","Month_label","Month","Channel",
                  "Net Sales","Quantity","MRP Sales","COGS","Freight Inward","Wages",
                  "Commission","Payment Gateway","Shipping","Bulk Logistic","Packaging",
                  "Warehousing","Others","Ad Spend","Return Amount","RTO%","Month_sort"]
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
+def normalise_channel(ch: str) -> str:
+    """Apply consistent channel normalisation across all data sources."""
+    return CHANNEL_NORMALISE.get(str(ch).strip(), str(ch).strip())
+
 def xlsb_to_date(n):
     try:
         return date(1899, 12, 30) + timedelta(days=int(float(n)))
@@ -82,15 +102,6 @@ def xlsb_to_date(n):
         return None
 
 def L(v):
-    try:
-        f = float(v)
-    except (TypeError, ValueError):
-        return "-"
-    if pd.isna(f) or f == 0:
-        return "-"
-    return f"{f:,.2f}"
-
-def Llacs(v):
     try:
         f = float(v)
     except (TypeError, ValueError):
@@ -124,14 +135,16 @@ def P(v):
         return f"{f:.1f}%"
     return f"{rounded:.1f}%"
 
-def INR(v):
+def Pgrowth(v):
+    """Format growth % with + sign for positives."""
     try:
         f = float(v)
     except (TypeError, ValueError):
         return "-"
-    if pd.isna(f) or f == 0:
+    if pd.isna(f):
         return "-"
-    return f"&#8377;{f:,.0f}"
+    sign = "+" if f > 0 else ""
+    return f"{sign}{f:.1f}%"
 
 def color_val(v, inverse=False):
     try:
@@ -178,6 +191,9 @@ def load_from_gsheet(_dummy="") -> pd.DataFrame:
         for col in num_cols:
             if col in df.columns:
                 df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
+        # Normalise channels loaded from sheet
+        if "Channel" in df.columns:
+            df["Channel"] = df["Channel"].apply(normalise_channel)
         return df
     except Exception as e:
         st.error(f"Sheet load error: {e}")
@@ -202,7 +218,6 @@ def load_expenses_from_gsheet(_dummy="") -> pd.DataFrame:
         st.error(f"Expense sheet load error: {e}")
         return pd.DataFrame()
 
-# ── NEW: Load SKU data from Google Sheets ─────────────────────────────────────
 @st.cache_data(ttl=300)
 def load_sku_from_gsheet(_dummy="") -> pd.DataFrame:
     try:
@@ -222,9 +237,10 @@ def load_sku_from_gsheet(_dummy="") -> pd.DataFrame:
         for col in num_cols:
             if col in df.columns:
                 df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
-        # EAN back to numeric
         if "EAN" in df.columns:
             df["EAN"] = pd.to_numeric(df["EAN"], errors="coerce")
+        if "Channel" in df.columns:
+            df["Channel"] = df["Channel"].apply(normalise_channel)
         return df
     except Exception as e:
         st.error(f"SKU sheet load error: {e}")
@@ -301,7 +317,6 @@ def save_expenses_to_gsheet(client, exp_df: pd.DataFrame):
     ws.update(df_to_rows(combined))
     return len(truly_new), len(exp_df) - len(truly_new)
 
-# ── NEW: Save SKU data to Google Sheets ───────────────────────────────────────
 def save_sku_to_gsheet(client, sku_df: pd.DataFrame):
     sh = get_sheet(client)
     try:
@@ -309,11 +324,9 @@ def save_sku_to_gsheet(client, sku_df: pd.DataFrame):
     except gspread.exceptions.WorksheetNotFound:
         ws = sh.add_worksheet(title="SKU_Data", rows=10000, cols=25)
 
-    # Keep only cols we need, drop dupes
     save_cols = [c for c in SKU_SAVE_COLS if c in sku_df.columns]
     out = sku_df[save_cols].copy()
 
-    # Full replace strategy — SKU data is keyed by Month+Model+Channel, easiest to just overwrite
     def df_to_rows(df):
         return [df.columns.tolist()] + df.astype(str).values.tolist()
 
@@ -358,12 +371,18 @@ def parse_xlsb(file_bytes: bytes) -> pd.DataFrame:
     df = df[pd.to_numeric(df["Sum of Revenue Without Tax"], errors="coerce").notna()]
     df = df[pd.to_numeric(df["Sum of Revenue Without Tax"], errors="coerce") != 0]
     df = df.dropna(subset=["Channel"])
-    df = df[df["Channel"].astype(str).isin(["Website","FBA","RK","Meesho","Flipkart","Myntra PPMP"])]
+
+    # Accept all known raw channel values (pre-normalisation)
+    valid_raw = ["Website","FBA","RK","Meesho","Flipkart",
+                 "Myntra PPMP","Myntra SJIT","Swiggy","Zepto"]
+    df = df[df["Channel"].astype(str).isin(valid_raw)]
 
     for col in [c for c in df.columns if isinstance(c, str) and c.startswith("Sum of")]:
         df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
 
-    df["Channel"] = df["Channel"].apply(lambda x: "Amazon" if x in ["FBA","RK"] else x)
+    # Normalise channels
+    df["Channel"] = df["Channel"].apply(normalise_channel)
+
     df["Month_date"]   = df["Month"].apply(xlsb_to_date)
     df["Month_name"]   = df["Month_date"].apply(lambda d: d.strftime("%b-%y") if d else "Unknown")
     df["Month_serial"] = df["Month"].apply(lambda x: str(int(float(x))) if pd.notna(x) else "")
@@ -418,7 +437,9 @@ def parse_sku_data(file_bytes: bytes) -> pd.DataFrame:
         if pd.notna(n) else None)
     df["EAN"]   = pd.to_numeric(df["New SKU"], errors="coerce")
     df["Model"] = df["EAN"].apply(lambda x: EAN_MAP.get(int(x), "Other") if pd.notna(x) else "Unknown")
-    df["Channel"] = df["Channel"].apply(lambda x: "Amazon" if x in ["FBA","RK"] else str(x))
+
+    # Normalise channels
+    df["Channel"] = df["Channel"].apply(normalise_channel)
 
     for c in SKU_NUM_COLS:
         if c in df.columns:
@@ -445,10 +466,7 @@ def parse_sku_data(file_bytes: bytes) -> pd.DataFrame:
         "Qty":                 "Quantity",
         "TOTAL MRP":           "MRP Sales",
         "Inward":              "Freight Inward",
-        "Wages":               "Wages",
         "commission":          "Commission",
-        "Payment Gateway":     "Payment Gateway",
-        "Shipping":            "Shipping",
         "Bulk Logistic Cost":  "Bulk Logistic",
         "Packaging Cost":      "Packaging",
         "Warehousing Charges": "Warehousing",
@@ -509,9 +527,7 @@ def build_pnl_table(df, months, channels):
     for _, row in grp.iterrows():
         lookup[row["Month_name"]] = {m: float(row[m]) for m in METRICS}
 
-    def v(metric, m):
-        return lookup.get(m, {}).get(metric, 0)
-
+    def v(metric, m):  return lookup.get(m, {}).get(metric, 0)
     def nsv(m):
         val = v("Net Sales", m)
         return val if val != 0 else np.nan
@@ -530,6 +546,19 @@ def build_pnl_table(df, months, channels):
 
     tot_ns  = tot.get("Net Sales", 0)
     tot_mrp = tot.get("MRP Sales", 0)
+
+    # ── Growth % helper ──────────────────────────────────────────────────────
+    def growth_pct(m, val_fn):
+        """MoM growth vs previous month in month_order list."""
+        idx = month_order.index(m)
+        if idx == 0:
+            return np.nan
+        prev = month_order[idx - 1]
+        cur_val  = val_fn(m)
+        prev_val = val_fn(prev)
+        if prev_val == 0 or pd.isna(prev_val):
+            return np.nan
+        return (cur_val - prev_val) / abs(prev_val) * 100
 
     def th(label):
         heads = "".join(f"<th>{m}</th>" for m in month_order)
@@ -562,6 +591,18 @@ def build_pnl_table(df, months, channels):
         tc = color_val(tv, inverse)
         return f"<tr class='{cls}'><td>{label}</td>{cells}<td style='color:{tc}'>{P(tv)}</td></tr>"
 
+    def growth_row(label, val_fn):
+        """Render a MoM growth % row (blue-ish, italic). No Total cell (growth of sum = N/A)."""
+        cells = ""
+        for m in month_order:
+            g = growth_pct(m, val_fn)
+            if pd.isna(g):
+                cells += "<td style='color:#555'>—</td>"
+            else:
+                c = color_val(g)
+                cells += f"<td style='color:{c}'>{Pgrowth(g)}</td>"
+        return f"<tr class='growth-row'><td>{label}</td>{cells}<td style='color:#555'>—</td></tr>"
+
     def gap():
         n = len(month_order) + 2
         return f"<tr class='section-gap'>{'<td></td>' * n}</tr>"
@@ -585,11 +626,16 @@ def build_pnl_table(df, months, channels):
                          lambda: (1 - safe_div(tot_ns, tot_mrp)) * 100 if tot_mrp else np.nan,
                          inverse=True)
     rows_html += gap()
+
+    # Net Sales with Growth % below
     rows_html += data_row("Net Sales",
                           lambda m: v("Net Sales", m) / 1e5,
                           lambda: tot_ns / 1e5,
                           cls="total-row")
+    rows_html += growth_row("  ↳ Growth % MoM",
+                            lambda m: v("Net Sales", m) / 1e5)
     rows_html += gap()
+
     rows_html += data_row("Less: COGS",
                           lambda m: v("COGS", m) / 1e5,
                           lambda: tot.get("COGS", 0) / 1e5,
@@ -751,30 +797,39 @@ def build_pnl_excel(df, months):
               for _, row in grp.iterrows()}
     month_order = grp.sort_values("Month_sort")["Month_name"].tolist()
 
-    def v(metric, m):      return lookup.get(m, {}).get(metric, 0)
-    def nsv(m):            return v("Net Sales", m) or np.nan
-    def mat(m):            return v("Net Sales", m) - v("COGS", m)
-    def fw(m):             return v("Freight Inward", m) + v("Wages", m)
-    def gm(m):             return mat(m) - fw(m)
-    def cnl(m):            return sum(v(c, m) for c in ["Commission","Payment Gateway","Shipping",
-                                                         "Bulk Logistic","Packaging","Warehousing",
-                                                         "Rebate","Others"])
-    def cm1(m):            return gm(m) - cnl(m)
-    def cm2(m):            return cm1(m) - v("Ad Spend", m)
-    def tot_val(fn):       return sum(fn(m) for m in month_order)
+    def v(metric, m):  return lookup.get(m, {}).get(metric, 0)
+    def nsv(m):        return v("Net Sales", m) or np.nan
+    def mat(m):        return v("Net Sales", m) - v("COGS", m)
+    def fw(m):         return v("Freight Inward", m) + v("Wages", m)
+    def gm(m):         return mat(m) - fw(m)
+    def cnl(m):        return sum(v(c, m) for c in ["Commission","Payment Gateway","Shipping",
+                                                     "Bulk Logistic","Packaging","Warehousing",
+                                                     "Rebate","Others"])
+    def cm1(m):        return gm(m) - cnl(m)
+    def cm2(m):        return cm1(m) - v("Ad Spend", m)
+    def tot_val(fn):   return sum(fn(m) for m in month_order)
+
+    def growth_vals(val_fn):
+        """Return list of MoM growth % values (one per month, NaN for first)."""
+        vals = []
+        for i, m in enumerate(month_order):
+            if i == 0:
+                vals.append(np.nan)
+            else:
+                prev = month_order[i - 1]
+                cur, prev_v = val_fn(m), val_fn(prev)
+                vals.append((cur - prev_v) / abs(prev_v) * 100 if prev_v else np.nan)
+        return vals
 
     tot_ns  = sum(v("Net Sales", m) for m in month_order) or np.nan
     tot_qty = sum(v("Quantity", m) for m in month_order)
 
-    GOLD_HEX = "C9A84C"
-    DARK_HEX = "1A1A1A"
-    GREEN    = "4CAF50"
-    RED      = "EF5350"
-
+    GOLD_HEX = "C9A84C"; DARK_HEX = "1A1A1A"; GREEN = "4CAF50"; RED = "EF5350"; BLUE = "5BA3C9"
     gold_fill = PatternFill("solid", fgColor=GOLD_HEX)
     dark_fill = PatternFill("solid", fgColor="1E1E1E")
     pct_fill  = PatternFill("solid", fgColor="222222")
     tot_fill  = PatternFill("solid", fgColor="2A2A2A")
+    grw_fill  = PatternFill("solid", fgColor="1A2530")
 
     wb = openpyxl.Workbook()
     ws = wb.active
@@ -793,47 +848,51 @@ def build_pnl_excel(df, months):
         cell.alignment = Alignment(horizontal="center" if ci > 1 else "left", vertical="center")
     ws.row_dimensions[1].height = 22
 
+    ns_vals = [v("Net Sales", m) / 1e5 for m in month_order]
+    ns_tot  = tot_ns / 1e5 if not pd.isna(tot_ns) else 0
+
     rows_def = [
-        ("MRP Sales", [v("MRP Sales", m)/1e5 for m in month_order], sum(v("MRP Sales",m) for m in month_order)/1e5, "0.00", False, False, False),
-        ("Quantity", [int(v("Quantity",m)) for m in month_order], int(tot_qty), "#,##0", False, False, False),
-        ("ASP", [safe_div(v("Net Sales",m),v("Quantity",m)) for m in month_order], safe_div(sum(v("Net Sales",m) for m in month_order),tot_qty), "₹#,##0", False, False, False),
-        ("Discount %", [(1-safe_div(v("Net Sales",m),v("MRP Sales",m)))*100 if v("MRP Sales",m) else np.nan for m in month_order], (1-safe_div(sum(v("Net Sales",m) for m in month_order),sum(v("MRP Sales",m) for m in month_order)))*100, "0.0%", False, True, True),
-        (None,None,None,None,False,False,False),
-        ("Net Sales", [v("Net Sales",m)/1e5 for m in month_order], (tot_ns/1e5 if not pd.isna(tot_ns) else 0), "0.00", True, False, False),
-        (None,None,None,None,False,False,False),
-        ("Less: COGS", [v("COGS",m)/1e5 for m in month_order], sum(v("COGS",m) for m in month_order)/1e5, "0.00", False, False, True),
-        ("COGS %", [safe_div(v("COGS",m),nsv(m))*100 for m in month_order], safe_div(sum(v("COGS",m) for m in month_order),tot_ns)*100, "0.0%", False, True, True),
-        (None,None,None,None,False,False,False),
-        ("Material Margins", [mat(m)/1e5 for m in month_order], tot_val(mat)/1e5, "0.00", True, False, False),
-        ("Material Margins (%)", [safe_div(mat(m),nsv(m))*100 for m in month_order], safe_div(tot_val(mat),tot_ns)*100, "0.0%", False, True, False),
-        (None,None,None,None,False,False,False),
-        ("Less: Freight Inwards", [v("Freight Inward",m)/1e5 for m in month_order], sum(v("Freight Inward",m) for m in month_order)/1e5, "0.00", False, False, True),
-        ("Less: Wages - Fixed", [v("Wages",m)/1e5 for m in month_order], sum(v("Wages",m) for m in month_order)/1e5, "0.00", False, False, True),
-        ("Freight & Wages Total", [fw(m)/1e5 for m in month_order], tot_val(fw)/1e5, "0.00", False, False, True),
-        ("Inward %age", [safe_div(fw(m),nsv(m))*100 for m in month_order], safe_div(tot_val(fw),tot_ns)*100, "0.0%", False, True, True),
-        (None,None,None,None,False,False,False),
-        ("Gross Margins", [gm(m)/1e5 for m in month_order], tot_val(gm)/1e5, "0.00", True, False, False),
-        ("Gross Margins (%)", [safe_div(gm(m),nsv(m))*100 for m in month_order], safe_div(tot_val(gm),tot_ns)*100, "0.0%", False, True, False),
-        (None,None,None,None,False,False,False),
-        ("Less: Commission Expense", [v("Commission",m)/1e5 for m in month_order], sum(v("Commission",m) for m in month_order)/1e5, "0.00", False, False, True),
-        ("Less: Payment Gateway", [v("Payment Gateway",m)/1e5 for m in month_order], sum(v("Payment Gateway",m) for m in month_order)/1e5, "0.00", False, False, True),
-        ("Less: Shipping Charges", [v("Shipping",m)/1e5 for m in month_order], sum(v("Shipping",m) for m in month_order)/1e5, "0.00", False, False, True),
-        ("Less: Bulk Logistic", [v("Bulk Logistic",m)/1e5 for m in month_order], sum(v("Bulk Logistic",m) for m in month_order)/1e5, "0.00", False, False, True),
-        ("Less: Packaging Cost", [v("Packaging",m)/1e5 for m in month_order], sum(v("Packaging",m) for m in month_order)/1e5, "0.00", False, False, True),
-        ("Less: Warehousing", [v("Warehousing",m)/1e5 for m in month_order], sum(v("Warehousing",m) for m in month_order)/1e5, "0.00", False, False, True),
-        ("Less: Rebate", [v("Rebate",m)/1e5 for m in month_order], sum(v("Rebate",m) for m in month_order)/1e5, "0.00", False, False, True),
-        ("Less: Others", [v("Others",m)/1e5 for m in month_order], sum(v("Others",m) for m in month_order)/1e5, "0.00", False, False, True),
-        ("Commission & Logistics Total", [cnl(m)/1e5 for m in month_order], tot_val(cnl)/1e5, "0.00", False, False, True),
-        ("Commission & Logistics %", [safe_div(cnl(m),nsv(m))*100 for m in month_order], safe_div(tot_val(cnl),tot_ns)*100, "0.0%", False, True, True),
-        (None,None,None,None,False,False,False),
-        ("CM1", [cm1(m)/1e5 for m in month_order], tot_val(cm1)/1e5, "0.00", True, False, False),
-        ("CM1 (%)", [safe_div(cm1(m),nsv(m))*100 for m in month_order], safe_div(tot_val(cm1),tot_ns)*100, "0.0%", False, True, False),
-        (None,None,None,None,False,False,False),
-        ("Less: Performance Marketing", [v("Ad Spend",m)/1e5 for m in month_order], sum(v("Ad Spend",m) for m in month_order)/1e5, "0.00", False, False, True),
-        ("ACOS (%)", [safe_div(v("Ad Spend",m),nsv(m))*100 for m in month_order], safe_div(sum(v("Ad Spend",m) for m in month_order),tot_ns)*100, "0.0%", False, True, True),
-        (None,None,None,None,False,False,False),
-        ("CM2", [cm2(m)/1e5 for m in month_order], tot_val(cm2)/1e5, "0.00", True, False, False),
-        ("CM2 (%)", [safe_div(cm2(m),nsv(m))*100 for m in month_order], safe_div(tot_val(cm2),tot_ns)*100, "0.0%", False, True, False),
+        ("MRP Sales",     [v("MRP Sales",m)/1e5 for m in month_order],     sum(v("MRP Sales",m) for m in month_order)/1e5, "0.00",   False, False, False, False),
+        ("Quantity",      [int(v("Quantity",m)) for m in month_order],      int(tot_qty),                                   "#,##0",  False, False, False, False),
+        ("ASP",           [safe_div(v("Net Sales",m),v("Quantity",m)) for m in month_order], safe_div(sum(v("Net Sales",m) for m in month_order),tot_qty), "₹#,##0", False, False, False, False),
+        ("Discount %",    [(1-safe_div(v("Net Sales",m),v("MRP Sales",m)))*100 if v("MRP Sales",m) else np.nan for m in month_order], (1-safe_div(sum(v("Net Sales",m) for m in month_order),sum(v("MRP Sales",m) for m in month_order)))*100, "0.0%", False, True, True, False),
+        (None,None,None,None,False,False,False,False),
+        ("Net Sales",     ns_vals,  ns_tot,  "0.00",  True,  False, False, False),
+        ("  ↳ Growth % MoM", growth_vals(lambda m: v("Net Sales",m)/1e5), np.nan, "0.0%", False, True, False, True),
+        (None,None,None,None,False,False,False,False),
+        ("Less: COGS",    [v("COGS",m)/1e5 for m in month_order],           sum(v("COGS",m) for m in month_order)/1e5,       "0.00",  False, False, True,  False),
+        ("COGS %",        [safe_div(v("COGS",m),nsv(m))*100 for m in month_order], safe_div(sum(v("COGS",m) for m in month_order),tot_ns)*100, "0.0%", False, True, True, False),
+        (None,None,None,None,False,False,False,False),
+        ("Material Margins",[mat(m)/1e5 for m in month_order], tot_val(mat)/1e5, "0.00", True, False, False, False),
+        ("Material Margins (%)",[safe_div(mat(m),nsv(m))*100 for m in month_order], safe_div(tot_val(mat),tot_ns)*100, "0.0%", False, True, False, False),
+        (None,None,None,None,False,False,False,False),
+        ("Less: Freight Inwards",[v("Freight Inward",m)/1e5 for m in month_order], sum(v("Freight Inward",m) for m in month_order)/1e5, "0.00", False, False, True, False),
+        ("Less: Wages - Fixed",  [v("Wages",m)/1e5 for m in month_order],          sum(v("Wages",m) for m in month_order)/1e5,          "0.00", False, False, True, False),
+        ("Freight & Wages Total",[fw(m)/1e5 for m in month_order], tot_val(fw)/1e5, "0.00", False, False, True, False),
+        ("Inward %age",   [safe_div(fw(m),nsv(m))*100 for m in month_order], safe_div(tot_val(fw),tot_ns)*100, "0.0%", False, True, True, False),
+        (None,None,None,None,False,False,False,False),
+        ("Gross Margins", [gm(m)/1e5 for m in month_order], tot_val(gm)/1e5, "0.00", True, False, False, False),
+        ("Gross Margins (%)",[safe_div(gm(m),nsv(m))*100 for m in month_order], safe_div(tot_val(gm),tot_ns)*100, "0.0%", False, True, False, False),
+        (None,None,None,None,False,False,False,False),
+        ("Less: Commission Expense",   [v("Commission",m)/1e5 for m in month_order],     sum(v("Commission",m) for m in month_order)/1e5,     "0.00", False, False, True, False),
+        ("Less: Payment Gateway",      [v("Payment Gateway",m)/1e5 for m in month_order],sum(v("Payment Gateway",m) for m in month_order)/1e5, "0.00", False, False, True, False),
+        ("Less: Shipping Charges",     [v("Shipping",m)/1e5 for m in month_order],       sum(v("Shipping",m) for m in month_order)/1e5,       "0.00", False, False, True, False),
+        ("Less: Bulk Logistic",        [v("Bulk Logistic",m)/1e5 for m in month_order],  sum(v("Bulk Logistic",m) for m in month_order)/1e5,  "0.00", False, False, True, False),
+        ("Less: Packaging Cost",       [v("Packaging",m)/1e5 for m in month_order],      sum(v("Packaging",m) for m in month_order)/1e5,      "0.00", False, False, True, False),
+        ("Less: Warehousing",          [v("Warehousing",m)/1e5 for m in month_order],    sum(v("Warehousing",m) for m in month_order)/1e5,    "0.00", False, False, True, False),
+        ("Less: Rebate",               [v("Rebate",m)/1e5 for m in month_order],         sum(v("Rebate",m) for m in month_order)/1e5,         "0.00", False, False, True, False),
+        ("Less: Others",               [v("Others",m)/1e5 for m in month_order],         sum(v("Others",m) for m in month_order)/1e5,         "0.00", False, False, True, False),
+        ("Commission & Logistics Total",[cnl(m)/1e5 for m in month_order], tot_val(cnl)/1e5, "0.00", False, False, True, False),
+        ("Commission & Logistics %",   [safe_div(cnl(m),nsv(m))*100 for m in month_order], safe_div(tot_val(cnl),tot_ns)*100, "0.0%", False, True, True, False),
+        (None,None,None,None,False,False,False,False),
+        ("CM1",    [cm1(m)/1e5 for m in month_order], tot_val(cm1)/1e5, "0.00", True, False, False, False),
+        ("CM1 (%)",[safe_div(cm1(m),nsv(m))*100 for m in month_order], safe_div(tot_val(cm1),tot_ns)*100, "0.0%", False, True, False, False),
+        (None,None,None,None,False,False,False,False),
+        ("Less: Performance Marketing",[v("Ad Spend",m)/1e5 for m in month_order], sum(v("Ad Spend",m) for m in month_order)/1e5, "0.00", False, False, True, False),
+        ("ACOS (%)",[safe_div(v("Ad Spend",m),nsv(m))*100 for m in month_order], safe_div(sum(v("Ad Spend",m) for m in month_order),tot_ns)*100, "0.0%", False, True, True, False),
+        (None,None,None,None,False,False,False,False),
+        ("CM2",    [cm2(m)/1e5 for m in month_order], tot_val(cm2)/1e5, "0.00", True, False, False, False),
+        ("CM2 (%)",[safe_div(cm2(m),nsv(m))*100 for m in month_order], safe_div(tot_val(cm2),tot_ns)*100, "0.0%", False, True, False, False),
     ]
 
     exp_df_ss = st.session_state.get("expense_df", pd.DataFrame())
@@ -843,14 +902,14 @@ def build_pnl_excel(df, months):
             return float(sub["Amount"].sum()) if not sub.empty else 0.0
         def cm3_xl(m): return cm2(m) - brand_mkt_xl(m)
         rows_def += [
-            (None,None,None,None,False,False,False),
-            ("Less: Brand Marketing", [brand_mkt_xl(m)/1e5 for m in month_order], sum(brand_mkt_xl(m) for m in month_order)/1e5, "0.00", False, False, True),
-            ("CM3", [cm3_xl(m)/1e5 for m in month_order], tot_val(cm3_xl)/1e5, "0.00", True, False, False),
-            ("CM3 (%)", [safe_div(cm3_xl(m),nsv(m))*100 for m in month_order], safe_div(tot_val(cm3_xl),tot_ns)*100, "0.0%", False, True, False),
+            (None,None,None,None,False,False,False,False),
+            ("Less: Brand Marketing",[brand_mkt_xl(m)/1e5 for m in month_order], sum(brand_mkt_xl(m) for m in month_order)/1e5, "0.00", False, False, True, False),
+            ("CM3",    [cm3_xl(m)/1e5 for m in month_order], tot_val(cm3_xl)/1e5, "0.00", True, False, False, False),
+            ("CM3 (%)",[safe_div(cm3_xl(m),nsv(m))*100 for m in month_order], safe_div(tot_val(cm3_xl),tot_ns)*100, "0.0%", False, True, False, False),
         ]
 
     for ri, row_def in enumerate(rows_def, 2):
-        label, vals, total, fmt, is_total, is_pct, inverse = row_def
+        label, vals, total, fmt, is_total, is_pct, inverse, is_growth = row_def
         if label is None:
             ws.row_dimensions[ri].height = 4
             for ci in range(1, ncols + 1):
@@ -861,6 +920,9 @@ def build_pnl_excel(df, months):
         if is_total:
             lc.fill = tot_fill
             lc.font = Font(bold=True, color=GOLD_HEX, size=10)
+        elif is_growth:
+            lc.fill = grw_fill
+            lc.font = Font(color=BLUE, size=9, italic=True)
         elif is_pct:
             lc.fill = pct_fill
             lc.font = Font(color="888888", size=9, italic=True)
@@ -869,20 +931,29 @@ def build_pnl_excel(df, months):
             lc.font = Font(color="CCCCCC", size=10)
         lc.alignment = Alignment(horizontal="left", vertical="center", indent=1)
 
+        # For growth rows the "Total" column is N/A
         all_vals = list(vals) + [total]
         for ci, val in enumerate(all_vals, 2):
             cell = ws.cell(ri, ci)
+
+            # Growth Total cell
+            if is_growth and ci == len(all_vals) + 1:
+                cell.value = None
+                cell.fill = grw_fill
+                cell.alignment = Alignment(horizontal="right", vertical="center")
+                continue
+
             try:
                 fv = float(val) if val is not None and not (isinstance(val, float) and pd.isna(val)) else None
             except (TypeError, ValueError):
                 fv = None
 
             if fv is not None:
-                cell.value = fv / 100 if is_pct else fv
+                cell.value = fv / 100 if is_pct or is_growth else fv
             else:
                 cell.value = None
 
-            cell.number_format = "0.0%" if is_pct else fmt
+            cell.number_format = "0.0%" if (is_pct or is_growth) else fmt
 
             if fv is not None and not pd.isna(fv):
                 is_positive = fv >= 0
@@ -892,7 +963,10 @@ def build_pnl_excel(df, months):
             else:
                 font_color = "CCCCCC"
 
-            if is_total:
+            if is_growth:
+                cell.fill = grw_fill
+                cell.font = Font(color=font_color, size=9, italic=True)
+            elif is_total:
                 cell.fill = tot_fill
                 cell.font = Font(bold=True, color=font_color, size=10)
             elif is_pct:
@@ -1020,14 +1094,12 @@ with st.sidebar:
             st.error(f"Expense parse error: {e}")
 
     # ── Auto-load from Google Sheets on session reset ──────────────────────────
-    # Expenses
     if "expense_df" not in st.session_state or st.session_state.get("expense_df", pd.DataFrame()).empty:
         loaded_exp = load_expenses_from_gsheet()
         if not loaded_exp.empty:
             st.session_state["expense_df"] = loaded_exp
             st.caption(f"📥 {len(loaded_exp)} expense records loaded from sheet")
 
-    # SKU data — auto-load if session was reset
     if "sku_df_cache" not in st.session_state or st.session_state.get("sku_df_cache", pd.DataFrame()).empty:
         loaded_sku = load_sku_from_gsheet()
         if not loaded_sku.empty:
@@ -1148,7 +1220,6 @@ if view == "P&L Summary":
 elif view == "Product P&L":
     st.subheader("Product-wise P&L")
 
-    # ── FIXED: load from GSheet if session was reset, no more re-upload prompt ─
     sku_df = st.session_state.get("sku_df_cache", pd.DataFrame())
     if sku_df.empty:
         st.warning("No product data found. Please upload the P&L file and click 'Save to Google Sheets' once.")
@@ -1157,8 +1228,12 @@ elif view == "Product P&L":
     all_models     = sorted(sku_df["Model"].unique())
     all_months_sku = (sku_df[["Month_label","Month_sort"]]
                       .drop_duplicates().sort_values("Month_sort")["Month_label"].tolist())
-    target_months  = {"Oct-25","Nov-25","Dec-25","Jan-26","Feb-26","Mar-26","Apr-26"}
-    avail_months   = [m for m in all_months_sku if m in target_months]
+
+    # Use all available months from actual data (not hard-coded)
+    avail_months = all_months_sku
+
+    # Channels available in SKU data (already normalised)
+    sku_channels_avail = sorted(sku_df["Channel"].unique())
 
     col_f1, col_f2, col_f3 = st.columns([2, 2, 2])
     with col_f1:
@@ -1166,7 +1241,7 @@ elif view == "Product P&L":
     with col_f2:
         sel_sku_months = st.multiselect("Months", avail_months, default=avail_months, key="sku_months")
     with col_f3:
-        sel_sku_ch = st.multiselect("Channels", CHANNELS, default=CHANNELS, key="sku_ch")
+        sel_sku_ch = st.multiselect("Channels", sku_channels_avail, default=sku_channels_avail, key="sku_ch")
 
     sku_f = sku_df[
         sku_df["Model"].isin(sel_models) &
@@ -1251,7 +1326,7 @@ elif view == "Product P&L":
     prod_monthly = (prod_df.groupby(["Month_label","Month_sort"])[
         ["Net Sales","Quantity","MRP Sales","COGS","Freight Inward","Wages",
          "Commission","Payment Gateway","Shipping","Bulk Logistic",
-         "Packaging","Warehousing","Others","Ad Spend"]
+         "Packaging","Warehousing","Others","Ad Spend","Return Amount"]
     ].sum().reset_index().sort_values("Month_sort").set_index("Month_label"))
 
     prod_months = [m for m in month_ord if m in prod_monthly.index]
@@ -1307,29 +1382,43 @@ elif view == "Product P&L":
     qty_tot   = int(sum(pv("Quantity", m) for m in prod_months))
     pb += f"<tr><td>Quantity</td>{qty_cells}<td>{qty_tot:,}</td></tr>"
     pb += f"<tr class='section-gap'>{'<td></td>' * ncol}</tr>"
-    pb += prow("Net Sales",             lambda m: pv("Net Sales", m),    is_total=True)
+    pb += prow("Net Sales",             lambda m: pv("Net Sales", m),      is_total=True)
     pb += f"<tr class='section-gap'>{'<td></td>' * ncol}</tr>"
-    pb += prow("Less: COGS",            lambda m: pv("COGS", m),         show_pct=True, inverse=True)
-    pb += prow("Material Margins",      lambda m: mat_m(m),              show_pct=True, is_total=True)
+    pb += prow("Less: COGS",            lambda m: pv("COGS", m),           show_pct=True, inverse=True)
+    pb += prow("Material Margins",      lambda m: mat_m(m),                show_pct=True, is_total=True)
     pb += f"<tr class='section-gap'>{'<td></td>' * ncol}</tr>"
     pb += prow("Less: Freight Inwards", lambda m: pv("Freight Inward", m), inverse=True)
     pb += prow("Less: Wages - Fixed",   lambda m: pv("Wages", m),          inverse=True)
     pb += prow("Freight & Wages Total", lambda m: fw_m(m),                 show_pct=True, inverse=True)
     pb += prow("Gross Margin",          lambda m: gm_m(m),                 show_pct=True, is_total=True)
     pb += f"<tr class='section-gap'>{'<td></td>' * ncol}</tr>"
-    pb += prow("Less: Commission",      lambda m: pv("Commission", m),      inverse=True)
-    pb += prow("Less: Payment GW",      lambda m: pv("Payment Gateway", m), inverse=True)
-    pb += prow("Less: Shipping",        lambda m: pv("Shipping", m),        inverse=True)
-    pb += prow("Less: Bulk Logistic",   lambda m: pv("Bulk Logistic", m),   inverse=True)
-    pb += prow("Less: Packaging",       lambda m: pv("Packaging", m),       inverse=True)
-    pb += prow("Less: Warehousing",     lambda m: pv("Warehousing", m),     inverse=True)
-    pb += prow("Less: Others",          lambda m: pv("Others", m),          inverse=True)
-    pb += prow("C&L Total",             lambda m: cnl_m(m),                 show_pct=True, inverse=True)
+    pb += prow("Less: Commission",      lambda m: pv("Commission", m),       inverse=True)
+    pb += prow("Less: Payment GW",      lambda m: pv("Payment Gateway", m),  inverse=True)
+    pb += prow("Less: Shipping",        lambda m: pv("Shipping", m),         inverse=True)
+    pb += prow("Less: Bulk Logistic",   lambda m: pv("Bulk Logistic", m),    inverse=True)
+    pb += prow("Less: Packaging",       lambda m: pv("Packaging", m),        inverse=True)
+    pb += prow("Less: Warehousing",     lambda m: pv("Warehousing", m),      inverse=True)
+    pb += prow("Less: Others",          lambda m: pv("Others", m),           inverse=True)
+    pb += prow("Less: Return Amount",   lambda m: pv("Return Amount", m),    inverse=True)
+    pb += prow("C&L Total",             lambda m: cnl_m(m),                  show_pct=True, inverse=True)
     pb += f"<tr class='section-gap'>{'<td></td>' * ncol}</tr>"
-    pb += prow("CM1",                   lambda m: cm1_m(m),                 show_pct=True, is_total=True)
+    pb += prow("CM1",                   lambda m: cm1_m(m),                  show_pct=True, is_total=True)
     pb += f"<tr class='section-gap'>{'<td></td>' * ncol}</tr>"
-    pb += prow("Less: Ad Spend",        lambda m: pv("Ad Spend", m),        show_pct=True, inverse=True)
-    pb += prow("CM2",                   lambda m: cm2_m(m),                 show_pct=True, is_total=True)
+    pb += prow("Less: Ad Spend",        lambda m: pv("Ad Spend", m),         show_pct=True, inverse=True)
+    pb += prow("CM2",                   lambda m: cm2_m(m),                  show_pct=True, is_total=True)
+
+    # RTO% row
+    rto_cells = ""
+    for m in prod_months:
+        ns_m = pv("Net Sales", m)
+        ret_m = pv("Return Amount", m)
+        rto = safe_div(ret_m, ns_m) * 100 if ns_m else np.nan
+        c = color_val(rto, inverse=True)
+        rto_cells += f"<td style='color:{c}'>{P(rto)}</td>"
+    tot_ret = sum(pv("Return Amount", m) for m in prod_months)
+    tot_rto = safe_div(tot_ret, tot_ns_prod) * 100
+    rto_tc  = color_val(tot_rto, inverse=True)
+    pb += f"<tr class='pct-row'><td>  ↳ RTO %</td>{rto_cells}<td style='color:{rto_tc}'>{P(tot_rto)}</td></tr>"
 
     st.markdown(f"""
     <div style='overflow-x:auto'>
@@ -1503,7 +1592,8 @@ elif view == "Month Trend":
     ch_monthly = (df.groupby(["Channel","Month_name","Month_sort"])[metric]
                   .sum().reset_index().sort_values("Month_sort"))
     fig2 = px.line(ch_monthly, x="Month_name", y=metric, color="Channel",
-                   color_discrete_sequence=[GOLD,"#e67e22","#4fc3f7","#81c784","#ce93d8"],
+                   color_discrete_sequence=[GOLD,"#e67e22","#4fc3f7","#81c784","#ce93d8",
+                                            "#f48fb1","#80deea"],
                    category_orders={"Month_name": month_order})
     fig2.update_layout(template="plotly_dark", plot_bgcolor=DARK, paper_bgcolor=DARK,
                        font=dict(color="#aaa"), margin=dict(t=20, b=30, l=10, r=10), height=350,
@@ -1515,7 +1605,8 @@ elif view == "Month Trend":
 elif view == "Channel Mix":
     st.subheader("Channel Mix")
     ch_agg = df.groupby("Channel")[["Net Sales","CM1","CM2","Ad Spend","Quantity"]].sum().reset_index()
-    COLORS = [GOLD,"#e67e22","#4fc3f7","#81c784","#ce93d8"]
+    # Enough colours for up to 7 channels
+    COLORS = [GOLD,"#e67e22","#4fc3f7","#81c784","#ce93d8","#f48fb1","#80deea"]
 
     col1, col2 = st.columns(2)
     with col1:
