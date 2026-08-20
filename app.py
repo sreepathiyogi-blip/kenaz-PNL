@@ -213,6 +213,8 @@ def load_expenses_from_gsheet(_dummy="") -> pd.DataFrame:
             return pd.DataFrame()
         df = pd.DataFrame(data)
         df["Amount"] = pd.to_numeric(df["Amount"], errors="coerce").fillna(0)
+        if "Month_sort" in df.columns:
+            df["Month_sort"] = df["Month_sort"].astype(str)
         return df
     except Exception as e:
         st.error(f"Expense sheet load error: {e}")
@@ -991,20 +993,37 @@ def build_pnl_excel(df, months):
 # ─── Expense Parser ───────────────────────────────────────────────────────────
 def parse_expense_data(file_bytes: bytes) -> pd.DataFrame:
     import openpyxl as _xl
+    import re
+    from datetime import datetime as _dt
     wb = _xl.load_workbook(io.BytesIO(file_bytes), read_only=True)
 
-    SHEET_MAP = {
-        "Sep - 25": "Sep-25", "Oct - 25": "Oct-25", "Nov - 25": "Nov-25",
-        "Dec - 25": "Dec-25", "Jan - 26": "Jan-26", "Feb-26":   "Feb-26",
-        "March-26": "Mar-26", "April-26": "Apr-26",
-    }
+    _MONTHS = {"jan":1,"feb":2,"mar":3,"march":3,"apr":4,"april":4,"may":5,
+               "jun":6,"june":6,"jul":7,"july":7,"aug":8,"sep":9,"sept":9,
+               "oct":10,"nov":11,"dec":12}
+
+    def _parse_month_tab(name):
+        """Detect a month tab from its name. Returns (label, sortkey) or None."""
+        s = re.sub(r"\s+", "", str(name)).lower()
+        m = re.match(r"([a-z]+)-?(\d{2,4})$", s)
+        if not m:
+            return None
+        mon, yr = m.group(1), m.group(2)
+        if mon not in _MONTHS:
+            return None
+        y = int(yr)
+        y = 2000 + y if y < 100 else y
+        d = _dt(y, _MONTHS[mon], 1)
+        return d.strftime("%b-%y"), d.strftime("%Y%m")
+
     SKIP = {"Name of the vendor","Website Spends","Marketplaces Spends",
             "Marketplaces Spend","Total","","None"}
     records = []
 
-    for sheet_name, month_label in SHEET_MAP.items():
-        if sheet_name not in wb.sheetnames:
+    for sheet_name in wb.sheetnames:
+        parsed = _parse_month_tab(sheet_name)
+        if not parsed:          # non-month tabs (e.g. Sheet4) are skipped
             continue
+        month_label, month_sort = parsed
         ws = wb[sheet_name]
         current_section = None
         for row in ws.iter_rows(values_only=True):
@@ -1024,11 +1043,12 @@ def parse_expense_data(file_bytes: bytes) -> pd.DataFrame:
             except (ValueError, TypeError):
                 amt = 0.0
             records.append({
-                "Month":   month_label,
-                "Section": "Influencer Spend" if "influencer" in current_section else "Marketing Spend",
-                "Vendor":  col_b,
-                "Nature":  str(row[3]).strip() if row[3] else "",
-                "Amount":  amt,
+                "Month":      month_label,
+                "Month_sort": month_sort,
+                "Section":    "Influencer Spend" if "influencer" in current_section else "Marketing Spend",
+                "Vendor":     col_b,
+                "Nature":     str(row[3]).strip() if row[3] else "",
+                "Amount":      amt,
             })
     return pd.DataFrame(records)
 
@@ -1450,8 +1470,15 @@ elif view == "Marketing Spend":
         st.stop()
 
     exp = st.session_state["expense_df"]
-    MONTH_ORD  = ["Sep-25","Oct-25","Nov-25","Dec-25","Jan-26","Feb-26","Mar-26","Apr-26"]
-    avail_months = [m for m in MONTH_ORD if m in exp["Month"].unique()]
+    # Derive month order from the data itself — no hardcoded list.
+    if "Month_sort" in exp.columns and exp["Month_sort"].notna().any():
+        avail_months = (exp[["Month","Month_sort"]].dropna().drop_duplicates()
+                        .sort_values("Month_sort")["Month"].tolist())
+    else:
+        avail_months = sorted(
+            exp["Month"].dropna().unique(),
+            key=lambda m: pd.to_datetime("01-" + str(m), format="%d-%b-%y", errors="coerce")
+        )
 
     inf_tot = exp[exp["Section"] == "Influencer Spend"]["Amount"].sum()
     mkt_tot = exp[exp["Section"] == "Marketing Spend"]["Amount"].sum()
