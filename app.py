@@ -58,8 +58,12 @@ st.markdown(f"""
 SCOPES    = ["https://www.googleapis.com/auth/spreadsheets","https://www.googleapis.com/auth/drive"]
 SHEET_KEY = "10qFitbppdVbNK0w67q1HFK-l7N1uAzHJ0mkyB2XImJQ"
 
+# Brand this dashboard reports on (used to filter the new multi-brand "Data" xlsx feed)
+BRAND_FILTER = "kenaz"
+
 # All channels after normalisation
-CHANNELS  = ["Website", "Amazon", "Meesho", "Flipkart", "Myntra", "Swiggy", "Zepto"]
+CHANNELS  = ["Website", "Amazon", "Meesho", "Flipkart", "Myntra", "Swiggy", "Zepto",
+             "Blinkit", "JioMart", "Nykaa", "Purplle", "Cred", "Flipkart Minutes", "Myntra B2B"]
 
 # Raw → normalised channel map (applied everywhere data is parsed)
 CHANNEL_NORMALISE = {
@@ -67,6 +71,23 @@ CHANNEL_NORMALISE = {
     "RK":           "Amazon",
     "Myntra PPMP":  "Myntra",
     "Myntra SJIT":  "Myntra",
+    # New raw channel names seen in the multi-brand "Data" xlsx feed
+    "MYNTRA PPMP":  "Myntra",
+    "MYNTRA SJIT":  "Myntra",
+    "Myntra PO":    "Myntra",
+    "MYNTRA PO":    "Myntra",
+    "Myntra B2C":   "Myntra",
+    "MYNTRA B2C":   "Myntra",
+    "MYNTRA B2B":   "Myntra B2B",
+    "Amazon FBA":   "Amazon",
+    "Amazon RK":    "Amazon",
+    "Website (EECOM)": "Website",
+    "Website Kenaz":   "Website",
+    "Website Guzz":    "Website",
+    "Website Embarouge": "Website",
+    "MEESHO":       "Meesho",
+    "Purplle B2B":  "Purplle",
+    "FK minutes":   "Flipkart Minutes",
 }
 
 EAN_MAP = {
@@ -76,6 +97,24 @@ EAN_MAP = {
     8906188065881: "Twilight",       8906188065980: "Bahiyaa Bayda",
     8904512100307: "Female Gift Set",8904512100291: "Male Gift Set",
 }
+
+# Fallback name → model keyword map, used for the new "Data" xlsx feed where many rows
+# carry "New SKU" == "Others" but the free-text product Name still identifies the model.
+MODEL_NAME_KEYWORDS = [
+    ("bahiyaa bayda",       "Bahiyaa Bayda"),
+    ("oud ameer",           "Oud Ameer"),
+    ("la beaut",            "La Beaute"),      # matches "La Beaute" / "La Beauté"
+    ("gentleman",           "Gentleman"),
+    ("triumph",             "Triumph"),
+    ("untamed",             "Untamed"),
+    ("twilight",             "Twilight"),
+    ("fortuna",              "Fortuna"),
+    ("women perfume gift",   "Female Gift Set"),
+    ("women's perfume gift", "Female Gift Set"),
+    ("men perfume gift",     "Male Gift Set"),
+    ("men's perfume gift",   "Male Gift Set"),
+    ("men parfum gs",        "Male Gift Set"),
+]
 
 SKU_NUM_COLS = ["Revenue Without Tax","Qty","COGS","TOTAL MRP","Inward","Wages",
                 "commission","Payment Gateway","Shipping","Bulk Logistic Cost",
@@ -416,6 +455,160 @@ def parse_xlsb(file_bytes: bytes) -> pd.DataFrame:
         "Warehousing":     grp["Sum of Warehousing Charges"],
         "Rebate":          grp["Sum of Rebate"],
     })
+
+# ─── New multi-brand "Data" xlsx feed parser ─────────────────────────────────
+# Some source systems now export a row-level (order/SKU-level) workbook, with sheets
+# COGS / List / Mapping Master / Apportioned / Month on Month / Packaging / Data /
+# Commission / Spends, covering several brands at once. The "Data" sheet is already
+# fully computed at row level (Freight Inwards, Wages, commission, Shipping, others,
+# Bulk Logistic Cost, Packaging Cost, Warehousing Charges, Payment Gateway, Total
+# Spend are all rupee amounts, not rates) so it can be aggregated directly into the
+# same Month/Channel P&L shape used elsewhere in this app.
+def _excel_serial_from_date(d) -> str:
+    try:
+        if hasattr(d, "date"):
+            d = d.date()
+        return str((d - date(1899, 12, 30)).days)
+    except Exception:
+        return ""
+
+def _read_data_sheet_records(file_bytes: bytes):
+    """Return a list of dict records from the 'Data' sheet of the new xlsx feed,
+    locating the real header row automatically (the sheet has a couple of junk
+    rows above it before the actual 'Month' header row)."""
+    import openpyxl as _xl
+    wb = _xl.load_workbook(io.BytesIO(file_bytes), read_only=True, data_only=True)
+    ws = wb["Data"]
+    headers = None
+    records = []
+    for row in ws.iter_rows(values_only=True):
+        if headers is None:
+            if row and row[0] == "Month":
+                headers = list(row)
+            continue
+        records.append(dict(zip(headers, row)))
+    return records
+
+def parse_kenaz_data_feed(file_bytes: bytes, brand: str = BRAND_FILTER) -> pd.DataFrame:
+    """Parse the new multi-brand 'Data' xlsx feed into the same Month/Channel P&L
+    shape as parse_xlsb(), filtered to a single brand (via the 'Brand Tag' column)."""
+    records = _read_data_sheet_records(file_bytes)
+    df = pd.DataFrame(records)
+    if df.empty:
+        return pd.DataFrame(columns=PNL_COLS)
+
+    df = df[df["Brand Tag"].astype(str).str.strip().str.lower() == brand.lower()]
+    df = df[df["Sale / Return"].astype(str).str.strip().str.lower() == "sale"]
+    if df.empty:
+        return pd.DataFrame(columns=PNL_COLS)
+
+    df["Channel"] = df["Channel"].apply(normalise_channel)
+
+    # Source column → target P&L column. All values here are already rupee amounts
+    # at row level (confirmed against the source workbook), so a straight sum works.
+    SRC_TO_PNL = {
+        "Revenue":              "Net Sales",
+        "Qty":                  "Quantity",
+        "TOTAL MRP":            "MRP Sales",
+        "COGS":                 "COGS",
+        "Freight Inwards":      "Freight Inward",
+        "Wages- Fixed":         "Wages",
+        "commission":           "Commission",
+        "Payment Gateway":      "Payment Gateway",
+        "Shipping":             "Shipping",
+        "others":               "Others",
+        "Total Spend":          "Ad Spend",
+        "Bulk Logistic Cost":   "Bulk Logistic",
+        "Packaging Cost":       "Packaging",
+        "Warehousing Charges":  "Warehousing",
+    }
+    for src in SRC_TO_PNL:
+        if src in df.columns:
+            df[src] = pd.to_numeric(df[src], errors="coerce").fillna(0)
+        else:
+            df[src] = 0.0
+
+    df["Month_serial"] = df["Month"].apply(_excel_serial_from_date)
+    df["Month_name"]   = df["Month"].apply(lambda d: d.strftime("%b-%y") if hasattr(d, "strftime") else "Unknown")
+
+    grp = df.groupby(["Month_serial","Month_name","Channel"])[list(SRC_TO_PNL.keys())].sum().reset_index()
+    grp = grp.rename(columns=SRC_TO_PNL)
+    grp["Rebate"] = 0.0  # not present as a discrete column in this feed
+
+    return grp[PNL_COLS]
+
+def _assign_model(ean, name: str) -> str:
+    try:
+        ean_int = int(float(ean))
+        if ean_int in EAN_MAP:
+            return EAN_MAP[ean_int]
+    except (TypeError, ValueError):
+        pass
+    low = str(name).lower()
+    for kw, model in MODEL_NAME_KEYWORDS:
+        if kw in low:
+            return model
+    return "Other"
+
+def parse_kenaz_data_feed_sku(file_bytes: bytes, brand: str = BRAND_FILTER) -> pd.DataFrame:
+    """SKU-level companion to parse_kenaz_data_feed(). Many rows in this feed carry
+    'New SKU' == 'Others', so this falls back to keyword-matching the free-text
+    product Name against MODEL_NAME_KEYWORDS when the EAN isn't in EAN_MAP. Combo
+    packs and unrecognised names are bucketed as 'Other'."""
+    records = _read_data_sheet_records(file_bytes)
+    df = pd.DataFrame(records)
+    if df.empty:
+        return pd.DataFrame(columns=SKU_SAVE_COLS)
+
+    df = df[df["Brand Tag"].astype(str).str.strip().str.lower() == brand.lower()]
+    if df.empty:
+        return pd.DataFrame(columns=SKU_SAVE_COLS)
+
+    df["Channel"] = df["Channel"].apply(normalise_channel)
+    df["Model"]   = [_assign_model(e, n) for e, n in zip(df.get("New SKU", ""), df.get("Name", ""))]
+    df["EAN"]     = pd.to_numeric(df.get("New SKU"), errors="coerce")
+
+    df["Month_label"] = df["Month"].apply(lambda d: d.strftime("%b-%y") if hasattr(d, "strftime") else "Unknown")
+    df["Month_sort"]  = df["Month"].apply(_excel_serial_from_date).apply(
+        lambda s: s.zfill(10) if s else "9999999999")
+
+    NUM_SRC_TO_SKU = {
+        "Revenue":              "Net Sales",
+        "Qty":                  "Quantity",
+        "TOTAL MRP":            "MRP Sales",
+        "COGS":                 "COGS",
+        "Freight Inwards":      "Freight Inward",
+        "Wages- Fixed":         "Wages",
+        "commission":           "Commission",
+        "Payment Gateway":      "Payment Gateway",
+        "Shipping":             "Shipping",
+        "others":               "Others",
+        "Total Spend":          "Ad Spend",
+        "Bulk Logistic Cost":   "Bulk Logistic",
+        "Packaging Cost":       "Packaging",
+        "Warehousing Charges":  "Warehousing",
+    }
+    for src in NUM_SRC_TO_SKU:
+        if src in df.columns:
+            df[src] = pd.to_numeric(df[src], errors="coerce").fillna(0)
+        else:
+            df[src] = 0.0
+
+    sales_df   = df[df["Sale / Return"].astype(str).str.strip().str.lower() == "sale"]
+    returns_df = df[df["Sale / Return"].astype(str).str.strip().str.lower() == "return"]
+
+    grp = (sales_df.groupby(["Model","EAN","Month_label","Month","Channel","Month_sort"])[list(NUM_SRC_TO_SKU.keys())]
+           .sum().reset_index())
+    grp = grp.rename(columns=NUM_SRC_TO_SKU)
+
+    ret_grp = (returns_df.groupby(["Model","EAN","Month_label","Month","Channel","Month_sort"])["Revenue"]
+               .sum().reset_index().rename(columns={"Revenue": "Return Amount"}))
+
+    grp = grp.merge(ret_grp, on=["Model","EAN","Month_label","Month","Channel","Month_sort"], how="left")
+    grp["Return Amount"] = grp["Return Amount"].fillna(0)
+    grp["RTO%"] = (grp["Return Amount"] / grp["Net Sales"].replace(0, np.nan) * 100).fillna(0)
+
+    return grp[[c for c in SKU_SAVE_COLS if c in grp.columns]]
 
 # ─── SKU Parser ───────────────────────────────────────────────────────────────
 def parse_sku_data(file_bytes: bytes) -> pd.DataFrame:
@@ -1066,8 +1259,8 @@ with st.sidebar:
 
     st.markdown(f"📋 **Sheet:** [Kenaz_PL_DB](https://docs.google.com/spreadsheets/d/{SHEET_KEY})")
 
-    # ── P&L File Upload ────────────────────────────────────────────────────────
-    st.markdown("### 📤 Upload P&L File")
+    # ── P&L File Upload (legacy .xlsb source) ──────────────────────────────────
+    st.markdown("### 📤 Upload P&L File (.xlsb)")
     uploaded = st.file_uploader("Kenaz P&L (.xlsb)", type=["xlsb"])
 
     if uploaded:
@@ -1090,6 +1283,37 @@ with st.sidebar:
                     sku_added, sku_dupes = save_sku_to_gsheet(client, sku_parsed)
                 st.success(f"✅ P&L: {added:,} new rows. SKU: {sku_added:,} new rows.")
                 st.cache_data.clear()
+        except Exception as e:
+            st.error(f"Parse error: {e}")
+
+    # ── New row-level "Data" xlsx feed upload (alternate/new source format) ────
+    st.markdown("### 📤 Upload New Data Feed (.xlsx)")
+    st.caption("Multi-brand row-level export (sheet: 'Data'). Auto-filtered to Kenaz.")
+    uploaded_new = st.file_uploader("New Data Feed (.xlsx)", type=["xlsx"], key="new_feed_upload")
+
+    if uploaded_new:
+        try:
+            new_bytes  = uploaded_new.read()
+            raw_new    = parse_kenaz_data_feed(new_bytes)
+            sku_new    = parse_kenaz_data_feed_sku(new_bytes)
+
+            if raw_new.empty:
+                st.warning("No Kenaz rows found in this file's 'Data' sheet.")
+            else:
+                st.session_state["parsed_df"]    = enrich(raw_new)
+                st.session_state["sku_df_cache"] = sku_new
+
+                ch_counts_new = raw_new["Channel"].value_counts()
+                st.success(f"✅ {len(raw_new):,} Kenaz rows | {raw_new['Month_name'].nunique()} months")
+                st.info("  \n".join(f"• {ch}: {cnt}" for ch, cnt in ch_counts_new.items()))
+
+                if st.button("💾 Save to Google Sheets", type="primary", key="save_new_feed_btn"):
+                    with st.spinner("Saving P&L + SKU data…"):
+                        client = get_gsheet_client()
+                        added, dupes = save_to_gsheet(client, raw_new)
+                        sku_added, sku_dupes = save_sku_to_gsheet(client, sku_new)
+                    st.success(f"✅ P&L: {added:,} new rows. SKU: {sku_added:,} new rows.")
+                    st.cache_data.clear()
         except Exception as e:
             st.error(f"Parse error: {e}")
 
@@ -1632,8 +1856,9 @@ elif view == "Month Trend":
 elif view == "Channel Mix":
     st.subheader("Channel Mix")
     ch_agg = df.groupby("Channel")[["Net Sales","CM1","CM2","Ad Spend","Quantity"]].sum().reset_index()
-    # Enough colours for up to 7 channels
-    COLORS = [GOLD,"#e67e22","#4fc3f7","#81c784","#ce93d8","#f48fb1","#80deea"]
+    # Enough colours for up to 14 channels
+    COLORS = [GOLD,"#e67e22","#4fc3f7","#81c784","#ce93d8","#f48fb1","#80deea",
+              "#ffb74d","#a1887f","#90a4ae","#ba68c8","#4db6ac","#dce775","#f06292"]
 
     col1, col2 = st.columns(2)
     with col1:
