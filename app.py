@@ -537,39 +537,57 @@ def parse_kenaz_data_feed(file_bytes: bytes, brand: str = BRAND_FILTER) -> pd.Da
 
     return grp[PNL_COLS]
 
-def merge_legacy_ad_spend(new_df: pd.DataFrame, legacy_df: pd.DataFrame) -> pd.DataFrame:
-    """Override 'Ad Spend' in new_df (from the new xlsx feed) using legacy_df's
-    values (from the old .xlsb) matched on Month_serial + Channel.
+def merge_legacy_ad_spend(new_df: pd.DataFrame, legacy_df: pd.DataFrame):
+    """Combine the new xlsx feed with the old .xlsb into one P&L dataframe:
 
-    Only months actually present in legacy_df get overridden — e.g. if the old
-    .xlsb only has Jan-26..Jun-26, those months' Ad Spend (and everything that
-    flows from it: CM2, CM2%, ACOS%) is pulled from the old file, while months
-    only the new feed covers (e.g. Jul-26, Aug-26) are left as computed from the
-    new feed. Returns (merged_df, overridden_months) where overridden_months is
-    the sorted list of Month_name labels that were replaced, for UI feedback.
+    - Months present in BOTH: keep the new feed's full row, but override just
+      'Ad Spend' with the legacy value (matched on Month_serial + Channel) —
+      e.g. Jan-26..Jun-26, where the new feed's own spend tracking is incomplete
+      but its Revenue/COGS/etc. are the current source of truth.
+    - Months present ONLY in the legacy file (e.g. Oct-25..Dec-25, which don't
+      exist in the new feed's 'Data' sheet at all): pull those months in
+      wholesale — full row, unchanged — since the new feed has nothing to
+      offer for them.
+    - Months present ONLY in the new feed (e.g. Jul-26, Aug-26): left as-is.
+
+    Returns (merged_df, spend_overridden_months, months_added_from_legacy).
     """
     if legacy_df is None or legacy_df.empty:
-        return new_df, []
+        return new_df, [], []
 
     legacy = legacy_df.copy()
     legacy["Month_serial"] = legacy["Month_serial"].astype(str)
-    legacy_lookup = legacy.set_index(["Month_serial", "Channel"])["Ad Spend"].to_dict()
+    new_out = new_df.copy()
+    new_out["Month_serial"] = new_out["Month_serial"].astype(str)
+
+    new_months    = set(new_out["Month_serial"])
     legacy_months = set(legacy["Month_serial"])
 
-    out = new_df.copy()
-    out["Month_serial"] = out["Month_serial"].astype(str)
+    overlap_months     = legacy_months & new_months
+    legacy_only_months = legacy_months - new_months
+
+    # 1) Ad Spend backfill for months present in both sources.
+    legacy_lookup = legacy.set_index(["Month_serial", "Channel"])["Ad Spend"].to_dict()
 
     def _spend(row):
-        if row["Month_serial"] in legacy_months:
+        if row["Month_serial"] in overlap_months:
             return legacy_lookup.get((row["Month_serial"], row["Channel"]), 0.0)
         return row["Ad Spend"]
 
-    out["Ad Spend"] = out.apply(_spend, axis=1)
+    new_out["Ad Spend"] = new_out.apply(_spend, axis=1)
 
-    overridden = (out[out["Month_serial"].isin(legacy_months)]
-                  [["Month_serial","Month_name"]].drop_duplicates()
-                  .sort_values("Month_serial")["Month_name"].tolist())
-    return out, overridden
+    # 2) Months that only exist in the legacy file get added wholesale.
+    legacy_only_rows = legacy[legacy["Month_serial"].isin(legacy_only_months)]
+    combined = pd.concat([new_out, legacy_only_rows[list(new_out.columns)]], ignore_index=True) \
+               if not legacy_only_rows.empty else new_out
+
+    spend_overridden = (new_out[new_out["Month_serial"].isin(overlap_months)]
+                        [["Month_serial","Month_name"]].drop_duplicates()
+                        .sort_values("Month_serial")["Month_name"].tolist())
+    months_added = (legacy_only_rows[["Month_serial","Month_name"]].drop_duplicates()
+                    .sort_values("Month_serial")["Month_name"].tolist()) if not legacy_only_rows.empty else []
+
+    return combined, spend_overridden, months_added
 
 def _assign_model(ean, name: str) -> str:
     try:
@@ -1308,10 +1326,12 @@ with st.sidebar:
             st.session_state["legacy_pnl_raw"] = raw
 
             if "new_feed_pnl_raw" in st.session_state:
-                merged, overridden = merge_legacy_ad_spend(st.session_state["new_feed_pnl_raw"], raw)
+                merged, overridden, added = merge_legacy_ad_spend(st.session_state["new_feed_pnl_raw"], raw)
                 st.session_state["parsed_df"] = enrich(merged)
                 if overridden:
                     st.caption(f"🔗 Ad Spend for {', '.join(overridden)} pulled from this legacy file.")
+                if added:
+                    st.caption(f"➕ {', '.join(added)} added in full from this legacy file (missing from the new feed).")
             else:
                 st.session_state["parsed_df"] = enrich(raw)
             st.session_state["sku_df_cache"] = sku_parsed
@@ -1349,10 +1369,12 @@ with st.sidebar:
                 st.session_state["new_feed_pnl_raw"] = raw_new
 
                 if "legacy_pnl_raw" in st.session_state:
-                    merged, overridden = merge_legacy_ad_spend(raw_new, st.session_state["legacy_pnl_raw"])
+                    merged, overridden, added = merge_legacy_ad_spend(raw_new, st.session_state["legacy_pnl_raw"])
                     st.session_state["parsed_df"] = enrich(merged)
                     if overridden:
                         st.caption(f"🔗 Ad Spend for {', '.join(overridden)} pulled from the legacy .xlsb.")
+                    if added:
+                        st.caption(f"➕ {', '.join(added)} added in full from the legacy .xlsb (missing from this new feed).")
                 else:
                     st.session_state["parsed_df"] = enrich(raw_new)
                 st.session_state["sku_df_cache"] = sku_new
