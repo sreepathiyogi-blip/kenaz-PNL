@@ -537,6 +537,40 @@ def parse_kenaz_data_feed(file_bytes: bytes, brand: str = BRAND_FILTER) -> pd.Da
 
     return grp[PNL_COLS]
 
+def merge_legacy_ad_spend(new_df: pd.DataFrame, legacy_df: pd.DataFrame) -> pd.DataFrame:
+    """Override 'Ad Spend' in new_df (from the new xlsx feed) using legacy_df's
+    values (from the old .xlsb) matched on Month_serial + Channel.
+
+    Only months actually present in legacy_df get overridden — e.g. if the old
+    .xlsb only has Jan-26..Jun-26, those months' Ad Spend (and everything that
+    flows from it: CM2, CM2%, ACOS%) is pulled from the old file, while months
+    only the new feed covers (e.g. Jul-26, Aug-26) are left as computed from the
+    new feed. Returns (merged_df, overridden_months) where overridden_months is
+    the sorted list of Month_name labels that were replaced, for UI feedback.
+    """
+    if legacy_df is None or legacy_df.empty:
+        return new_df, []
+
+    legacy = legacy_df.copy()
+    legacy["Month_serial"] = legacy["Month_serial"].astype(str)
+    legacy_lookup = legacy.set_index(["Month_serial", "Channel"])["Ad Spend"].to_dict()
+    legacy_months = set(legacy["Month_serial"])
+
+    out = new_df.copy()
+    out["Month_serial"] = out["Month_serial"].astype(str)
+
+    def _spend(row):
+        if row["Month_serial"] in legacy_months:
+            return legacy_lookup.get((row["Month_serial"], row["Channel"]), 0.0)
+        return row["Ad Spend"]
+
+    out["Ad Spend"] = out.apply(_spend, axis=1)
+
+    overridden = (out[out["Month_serial"].isin(legacy_months)]
+                  [["Month_serial","Month_name"]].drop_duplicates()
+                  .sort_values("Month_serial")["Month_name"].tolist())
+    return out, overridden
+
 def _assign_model(ean, name: str) -> str:
     try:
         ean_int = int(float(ean))
@@ -1269,7 +1303,17 @@ with st.sidebar:
             raw = parse_xlsb(file_bytes)
             sku_parsed = parse_sku_data(file_bytes)
 
-            st.session_state["parsed_df"]    = enrich(raw)
+            # Cache the raw (pre-enrich) legacy P&L so it can supply Ad Spend for
+            # any months it covers if a new-format feed is also loaded this session.
+            st.session_state["legacy_pnl_raw"] = raw
+
+            if "new_feed_pnl_raw" in st.session_state:
+                merged, overridden = merge_legacy_ad_spend(st.session_state["new_feed_pnl_raw"], raw)
+                st.session_state["parsed_df"] = enrich(merged)
+                if overridden:
+                    st.caption(f"🔗 Ad Spend for {', '.join(overridden)} pulled from this legacy file.")
+            else:
+                st.session_state["parsed_df"] = enrich(raw)
             st.session_state["sku_df_cache"] = sku_parsed
 
             ch_counts = raw["Channel"].value_counts()
@@ -1300,12 +1344,23 @@ with st.sidebar:
             if raw_new.empty:
                 st.warning("No Kenaz rows found in this file's 'Data' sheet.")
             else:
-                st.session_state["parsed_df"]    = enrich(raw_new)
+                # Cache the raw (pre-enrich, pre-merge) new-feed P&L so re-uploading
+                # the legacy .xlsb later can still trigger the Ad Spend merge below.
+                st.session_state["new_feed_pnl_raw"] = raw_new
+
+                if "legacy_pnl_raw" in st.session_state:
+                    merged, overridden = merge_legacy_ad_spend(raw_new, st.session_state["legacy_pnl_raw"])
+                    st.session_state["parsed_df"] = enrich(merged)
+                    if overridden:
+                        st.caption(f"🔗 Ad Spend for {', '.join(overridden)} pulled from the legacy .xlsb.")
+                else:
+                    st.session_state["parsed_df"] = enrich(raw_new)
                 st.session_state["sku_df_cache"] = sku_new
 
                 ch_counts_new = raw_new["Channel"].value_counts()
                 st.success(f"✅ {len(raw_new):,} Kenaz rows | {raw_new['Month_name'].nunique()} months")
                 st.info("  \n".join(f"• {ch}: {cnt}" for ch, cnt in ch_counts_new.items()))
+                st.caption("💡 Also upload the old .xlsb above to backfill Ad Spend for months it covers.")
 
                 if st.button("💾 Save to Google Sheets", type="primary", key="save_new_feed_btn"):
                     with st.spinner("Saving P&L + SKU data…"):
